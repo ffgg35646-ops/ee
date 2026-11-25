@@ -1368,7 +1368,7 @@ async function showReviewPage(db: Db, chatId: number, page = 0, notice = '') {
 }
 
 async function showStoreLogoMenu(db: Db, chatId: number) {
-  const settings = await db.collection<{ _id: string; logoFileId?: string; logoBackgroundMode?: 'with' | 'without' }>('store_settings')
+  const settings = await db.collection<{ _id: string; logoFileId?: string; logoUrl?: string; logoBackgroundMode?: 'with' | 'without' }>('store_settings')
     .findOne({ _id: 'branding' });
 
   const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || 'erd-algwal-djl8.vercel.app';
@@ -1379,7 +1379,7 @@ async function showStoreLogoMenu(db: Db, chatId: number) {
   try {
     await telegramApi('sendPhoto', {
       chat_id: chatId,
-      photo: settings?.logoFileId ? siteOrigin + '/api/store/logo' : defaultLogoUrl,
+      photo: settings?.logoFileId ? siteOrigin + '/api/store/logo' : settings?.logoUrl || defaultLogoUrl,
       caption: 'الشعار الحالي'
     });
   } catch (error) {
@@ -2415,6 +2415,7 @@ async function handleFlowMessage(db: Db, session: AdminSession, message: Telegra
       },
       { upsert: true }
     );
+    await db.collection('store_settings').updateOne({ _id: 'branding' }, { $unset: { logoUrl: '' } });
     await db.collection('telegram_sessions').deleteOne({ telegramUserId: session.telegramUserId });
     await sendMainMenu(db, chatId, '✅ تم استبدال الشعار الحالي. سيظهر الشعار الجديد في رأس الموقع بعد تحديث الصفحة.');
     return;

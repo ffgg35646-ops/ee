@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic';
 type StoreBrandingSettings = {
   _id: string;
   logoFileId?: string;
+  logoUrl?: string;
   logoBackgroundMode?: 'with' | 'without';
 };
 
@@ -107,6 +108,18 @@ export async function GET() {
     const db = await getDb();
     const settings = await db.collection<StoreBrandingSettings>('store_settings')
       .findOne({ _id: 'branding' });
+    if (!settings?.logoFileId && settings?.logoUrl) {
+      try {
+        const logoUrl = new URL(settings.logoUrl);
+        if (logoUrl.protocol === 'https:' && !logoUrl.username && !logoUrl.password) {
+          return NextResponse.redirect(logoUrl, {
+            headers: { 'cache-control': 'no-store, max-age=0', 'x-content-type-options': 'nosniff' }
+          });
+        }
+      } catch {
+        // Ignore an invalid saved URL and retain the existing fallback behavior.
+      }
+    }
     if (!settings?.logoFileId) {
       return new NextResponse('Custom store logo not configured', { status: 404 });
     }

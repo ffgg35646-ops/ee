@@ -28,7 +28,7 @@
 ## متغيرات البيئة
 أضف القيم في إعدادات الاستضافة فقط؛ لا تحفظ أسرارًا حقيقية في GitHub:
 - `MONGODB_URI`
-- `MONGODB_DB=bb_store`
+- `MONGODB_DB=ee_store`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ADMIN_IDS=5569918211,2222222222` — معرّفات الأدمن مفصولة بفاصلة (يمكن إضافة أكثر من ID). وللتوافق مع الإعداد القديم يمكن استخدام `TELEGRAM_ADMIN_ID` لمعرّف واحد.
 - `TELEGRAM_WEBHOOK_SECRET`
@@ -53,3 +53,17 @@ npm run telegram:set-webhook
 npm install
 npm run dev
 ```
+
+
+## لوحة الإدارة عبر الويب
+- لوحة الإدارة متاحة على `/admin`، وصفحة الدخول على `/admin/login`.
+- لوحة الويب وبوت تيليجرام يعملان على مجموعات MongoDB نفسها داخل قاعدة EE: `categories` و`products` و`orders` و`store_banners` و`store_settings` و`store_pages` و`customer_reviews`.
+- قاعدة البيانات الافتراضية هي `ee_store`. لا تستخدم هذه النسخة قاعدة `bb_store`.
+- أضف متغيرات البيئة التالية عند تجهيز اتصال MongoDB وتشغيل لوحة الإدارة:
+  - `MONGODB_URI`
+  - `MONGODB_DB=ee_store`
+  - `WEB_ADMIN_USERNAME`
+  - `WEB_ADMIN_PASSWORD`
+  - `WEB_ADMIN_SECRET` — قيمة عشوائية قوية لا تقل عن 32 حرفًا.
+- لا توجد بيانات دخول افتراضية داخل المستودع. لا تضع كلمات المرور أو مفاتيح الاتصال في GitHub.
+- لا تتطلب لوحة الإدارة اتصال MongoDB حتى يتم بناء المشروع، لكن تحميل البيانات وحفظها يحتاج إلى إضافة `MONGODB_URI` في بيئة التشغيل.
