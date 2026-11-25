@@ -22,8 +22,16 @@ function parseStorage(value: string) {
   });
   return { options, prices };
 }
-function parsePairs(value: string) {
-  return Object.fromEntries(value.split(/\r?\n/).map(x => x.split('=').map(y => y.trim())).filter(x => x.length > 1 && x[0] && x[1]));
+function parsePairs(value: string): Record<string, string> {
+  const entries: Array<[string, string]> = [];
+  for (const line of value.split(/\r?\n/)) {
+    const separator = line.indexOf('=');
+    if (separator < 1) continue;
+    const key = line.slice(0, separator).trim();
+    const imageUrl = line.slice(separator + 1).trim();
+    if (key && imageUrl) entries.push([key, imageUrl]);
+  }
+  return Object.fromEntries(entries);
 }
 
 export default function AdminDashboard() {
