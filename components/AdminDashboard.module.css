@@ -130,7 +130,7 @@
 .reviewRow strong { font-size: 12px; }
 .reviewRow p { margin: 4px 0; color: #64747c; font-size: 11px; }
 .reviewRow small { color: var(--admin-gold-dark); font-size: 10px; }
-.loginPage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 15% 15%,rgba(178,139,55,.09),transparent 30%),#f7f8f6; }
+.loginPage { --admin-ink: #142d3b; --admin-muted: #7b8990; --admin-gold: #b28b37; --admin-gold-dark: #80601f; --admin-gold-pale: #f8f1df; --admin-line: #e6ebe7; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 15% 15%,rgba(178,139,55,.09),transparent 30%),#f7f8f6; }
 .loginCard { width: min(430px,100%); display: grid; gap: 13px; padding: 34px; border: 1px solid var(--admin-line); border-radius: 19px; background: #fff; box-shadow: 0 24px 70px rgba(20,45,59,.09); }
 .loginMark { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 17px; color: #fff; background: var(--admin-gold); font-size: 29px; font-weight: 900; }
 .loginEyebrow { margin-top: 6px; color: var(--admin-gold-dark); font-size: 11px; font-weight: 800; }

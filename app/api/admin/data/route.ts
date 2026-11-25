@@ -341,14 +341,17 @@ export async function PATCH(request: NextRequest) {
     if (section === 'settings') {
       const projectName = clean(data.projectName, 120);
       if (!projectName) return bad('اسم المتجر مطلوب.');
-      const whatsappNumber = clean(data.whatsappNumber, 40);
+      const whatsappInput = clean(data.whatsappNumber, 40);
+      const whatsappNumber = whatsappInput.replace(/[^0-9]/g, '');
+      if (whatsappNumber && (whatsappNumber.length < 8 || whatsappNumber.length > 15)) return bad('رقم واتساب غير صحيح.');
       const vatNumber = clean(data.vatNumber, 80);
       const logoUrl = clean(data.logoUrl, 2000);
       if (logoUrl && !logoUrl.startsWith('https://')) return bad('رابط الشعار يجب أن يبدأ بـ HTTPS.');
       const footerFields: Record<string, unknown> = { vatNumber, vatNumberRemoved: !vatNumber, updatedAt: now, updatedByWebAdmin: true };
       const iconOneImageUrl = clean(data.iconOneImageUrl, 2000), iconOneLinkUrl = clean(data.iconOneLinkUrl, 2000);
       const iconTwoImageUrl = clean(data.iconTwoImageUrl, 2000), iconTwoLinkUrl = clean(data.iconTwoLinkUrl, 2000);
-      for (const url of [iconOneImageUrl, iconTwoImageUrl]) if (url && !url.startsWith('https://')) return bad('روابط أيقونات الفوتر يجب أن تبدأ بـ HTTPS.');
+      for (const url of [iconOneImageUrl, iconTwoImageUrl]) if (url && !/^https:\/\//i.test(url)) return bad('روابط صور أيقونات الفوتر يجب أن تبدأ بـ HTTPS.');
+      for (const url of [iconOneLinkUrl, iconTwoLinkUrl]) if (url && !/^https:\/\//i.test(url)) return bad('روابط وجهات أيقونات الفوتر يجب أن تبدأ بـ HTTPS.');
       Object.assign(footerFields, { iconOneImageUrl, iconOneLinkUrl, iconTwoImageUrl, iconTwoLinkUrl });
       const brandingWrite = logoUrl
         ? db.collection('store_settings').updateOne(
@@ -409,7 +412,12 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ ok: true }, { headers: noStore });
     }
     if (section === 'categories') {
-      const productCount = await db.collection('products').countDocuments({ categoryId: id, deleted: { $ne: true } });
+      const category = await db.collection('categories').findOne({ _id: objectId });
+      if (!category) return bad('القسم غير موجود.', 404);
+      const productCount = await db.collection('products').countDocuments({
+        deleted: { $ne: true },
+        $or: [{ categoryId: id }, { category: category.name }]
+      });
       if (productCount) return bad('لا يمكن حذف قسم يحتوي على منتجات. انقل المنتجات إلى قسم آخر أولًا.', 409);
       await db.collection('categories').updateOne({ _id: objectId }, { $set: { deleted: true, updatedAt: new Date() } });
       return NextResponse.json({ ok: true }, { headers: noStore });
