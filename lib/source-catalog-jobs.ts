@@ -54,7 +54,7 @@ export async function getCatalogImportJob(db: Db) {
 export async function startCatalogImportJob(
   db: Db,
   urls: string[],
-  discovery: { scannedSitemaps?: number; scannedPages?: number; warnings?: string[] } = {},
+  discovery: { scannedSitemaps?: number; scannedPages?: number; warnings?: string[]; categoryOverride?: string } = {},
   startedBy = 'web'
 ) {
   const uniqueUrls = [...new Set(urls)].filter((url) => /^https:\/\/(?:www\.)?al-brag-ksa\.store\/product2\/\d+\/?$/i.test(url)).slice(0, 2000);
