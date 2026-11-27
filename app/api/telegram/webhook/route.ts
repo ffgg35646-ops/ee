@@ -3419,6 +3419,20 @@ async function handleUpdate(db: Db, update: TelegramUpdate) {
   }
   if (value === MENU_IMPORT_CATALOG) {
     await db.collection('telegram_sessions').deleteOne({ telegramUserId: from.id });
+    const activeJob = await getCatalogImportJob(db);
+    if (activeJob && ['ready', 'running'].includes(activeJob.status)) {
+      await sendTelegramMessage(
+        chatId,
+        'توجد عملية استيراد مشتركة بدأها البوت أو لوحة الويب.\\n'
+        + 'التقدم: ' + activeJob.cursor + ' من ' + activeJob.urls.length + '\\n'
+        + 'تم استيراده: ' + activeJob.imported + ' | مكرر: ' + activeJob.skipped + ' | فشل: ' + activeJob.failed,
+        { reply_markup: { inline_keyboard: [
+          [{ text: 'استكمال الدفعة التالية', callback_data: 'import-catalog-next' }],
+          [{ text: 'إيقاف الاستيراد', callback_data: 'import-catalog-stop' }]
+        ] } }
+      );
+      return;
+    }
     await sendTelegramMessage(chatId, 'أفحص الآن خرائط الموقع والروابط العامة لاكتشاف المنتجات. لن يتم حفظ أي منتج قبل ظهور نتيجة الاكتشاف.');
     try {
       const discovery = await discoverAlBragProductUrls();
