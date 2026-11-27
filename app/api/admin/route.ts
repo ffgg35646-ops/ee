@@ -6,6 +6,7 @@ import { getAdminFromRequest, ensureBootstrapAdmin, hashAdminPassword } from '@/
 import { listCategories, sortStoreCategoriesBySourceOrder, type StoreCategory, type StoredProduct } from '@/lib/catalog';
 import { discoverAlBragCategoryProductUrls, discoverAlBragProductUrls, importAlBragProduct } from '@/lib/source-product-importer';
 import { isPhoneCaseProduct } from '@/lib/phone-case';
+import { fetchRemoteImage } from '@/lib/remote-image';
 import {
   getCatalogImportJob,
   startCatalogImportJob,
@@ -200,6 +201,135 @@ function colorImageMap(value: unknown, colors: string[]) {
   return result;
 }
 
+function productAdminMediaRefs(product: Partial<StoredProduct>) {
+  const values = [
+    ...(Array.isArray(product.images) ? product.images : []),
+    product.imageUrl,
+    ...Object.values(product.colorImages || {})
+  ];
+  return [...new Set(values.filter((value): value is string =>
+    typeof value === 'string' && value.startsWith('admin-media:')
+  ))];
+}
+
+async function removeUnusedAdminMedia(db: Awaited<ReturnType<typeof getDb>>, refs: string[]) {
+  for (const ref of [...new Set(refs)]) {
+    const id = ref.slice('admin-media:'.length);
+    if (!ObjectId.isValid(id)) continue;
+    const usedByProduct = await db.collection<StoredProduct>('products').aggregate([
+      { $match: { deleted: { $ne: true } } },
+      { $match: { $or: [
+        { images: ref },
+        { imageUrl: ref },
+        { $expr: { $in: [ref, {
+          $map: {
+            input: { $objectToArray: { $ifNull: ['$colorImages', {}] } },
+            as: 'entry',
+            in: '$entry.v'
+          }
+        }] } }
+      ] } },
+      { $limit: 1 },
+      { $project: { _id: 1 } }
+    ]).toArray();
+    const usedByBanner = await db.collection('store_banners').findOne({
+      $or: [{ mediaId: id }, { imageUrl: ref }]
+    });
+    if (!usedByProduct.length && !usedByBanner) {
+      await db.collection('admin_media').deleteOne({ _id: new ObjectId(id) });
+    }
+  }
+}
+
+const IMPORTABLE_IMAGE_HOSTS = new Set([
+  'al-brag-ksa.com','i5.walmartimages.com','cdn.mafrservices.com','www.belkin.com',
+  'res.plaisio.gr','multimedia.bbycastatic.ca','shepetivka.com.ua','images.samsung.com',
+  'media.tatacroma.com','cdn.beebom.com','cdn.idealo.com','image.vandenborre.be',
+  'media.ldlc.com','smartmania.cz','gadgets-msk.ru','www.juzaphoto.com',
+  'consumer.huawei.com','www.hi-fi.ru','img-prd-pim.poorvika.com','uk.tech21.com',
+  'down-my.img.susercontent.com','i.blogs.es','media.karousell.com','img01.huaweifile.com',
+  'store.yohohongkong.com','www.nfm.com','cdn.ballicom.co.uk','assets.mmsrg.com',
+  'cdn1.technopark.ru','cdn1.sgliteasset.com','images1.mobilissimo.ro','cdn11.bigcommerce.com',
+  'img02.honorfile.com','alkaramhome.com','dwecxxryy5p59.cloudfront.net','xstore.md',
+  'www.pbtech.co.nz','www.digitec.ch','lmt-web.mstatic.lv','image.ksdenki.com',
+  'cdn.media.amplience.net','cdn2.fptshop.com.vn','s3.us-east-1.amazonaws.com',
+  'pimcdn.sharafdg.com','cdn.tmobile.com','ak-asset.jarir.com','www.jbhifi.co.nz',
+  'besttrendonline.com','s3.belkin.com','www.costco.com.mx','store.storeimages.cdn-apple.com',
+  'files.foxtrot.com.ua','f00.esfr.pl','m.media-amazon.com','cdn.cs.1worldsync.com',
+  'cdn.shopify.com','www.courts.com.sg','pisces.bbystatic.com',
+  'cdsassets.apple.com','images.apple.com','www.apple.com'
+]);
+
+async function importProductImagesToAdminMedia(
+  db: Awaited<ReturnType<typeof getDb>>,
+  adminEmail: string,
+  product: StoredProduct
+) {
+  const urls = [...new Set([
+    ...(Array.isArray(product.images) ? product.images : []),
+    ...Object.values(product.colorImages || {})
+  ].filter((value): value is string => {
+    if (typeof value !== 'string' || value.startsWith('admin-media:')) return false;
+    try {
+      const url = new URL(value);
+      return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  }))];
+  if (!urls.length) return { images: product.images || [], colorImages: product.colorImages || {}, importedCount: 0 };
+  if (urls.length > 20) throw new Error('عدد روابط الصور لهذا المنتج أكبر من الحد المسموح به في عملية واحدة.');
+  for (const value of urls) {
+    const host = new URL(value).hostname.toLowerCase();
+    if (!IMPORTABLE_IMAGE_HOSTS.has(host)) {
+      throw new Error('مصدر إحدى الصور غير موجود في قائمة النطاقات المسموح باستيرادها: ' + host);
+    }
+  }
+
+  const replacements = new Map<string, string>();
+  const insertedIds: ObjectId[] = [];
+  try {
+    for (let offset = 0; offset < urls.length; offset += 4) {
+      const batch = await Promise.all(urls.slice(offset, offset + 4).map(async (url) => {
+        const response = await fetchRemoteImage(url);
+        if (!response.ok) throw new Error('تعذر تنزيل إحدى الصور من مصدرها الخارجي (HTTP ' + response.status + ').');
+        const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+        if (!['image/jpeg','image/png','image/webp','image/gif','image/avif'].includes(contentType)) {
+          throw new Error('المصدر لم يُرجع ملف صورة مدعومًا.');
+        }
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (!bytes.length || bytes.length > 4 * 1024 * 1024) {
+          throw new Error('حجم إحدى الصور أكبر من 4 ميجابايت أو أن الملف فارغ.');
+        }
+        const id = new ObjectId();
+        const pathname = new URL(url).pathname;
+        const filename = decodeURIComponent(pathname.split('/').pop() || 'product-image').slice(0, 180);
+        await db.collection('admin_media').insertOne({
+          _id: id,
+          dataBase64: bytes.toString('base64'),
+          contentType,
+          filename,
+          size: bytes.length,
+          createdAt: new Date(),
+          createdByAdminEmail: adminEmail
+        });
+        insertedIds.push(id);
+        replacements.set(url, 'admin-media:' + id.toHexString());
+      }));
+      void batch;
+    }
+  } catch (error) {
+    if (insertedIds.length) await db.collection('admin_media').deleteMany({ _id: { $in: insertedIds } });
+    throw error;
+  }
+
+  const images = (product.images || []).map((image) => replacements.get(image) || image);
+  const colorImages = Object.fromEntries(
+    Object.entries(product.colorImages || {}).map(([color, image]) => [color, replacements.get(image) || image])
+  );
+  return { images, colorImages, importedCount: replacements.size };
+}
+
 function readProductPayload(body: Body) {
   const name = textValue(body.name, 120);
   const categoryId = textValue(body.categoryId, 40);
@@ -234,6 +364,27 @@ function readProductPayload(body: Body) {
 async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id: string; email: string; role: string }, action: string, body: Body) {
   const now = new Date();
 
+  if (action === 'import-product-media') {
+    const id = textValue(body.id, 40);
+    if (!ObjectId.isValid(id)) throw new Error('معرّف المنتج غير صالح.');
+    const collection = db.collection<StoredProduct>('products');
+    const product = await collection.findOne({ _id: new ObjectId(id), deleted: { $ne: true } });
+    if (!product) throw new Error('المنتج غير موجود أو تم حذفه.');
+    const imported = await importProductImagesToAdminMedia(db, admin.email, product);
+    if (imported.importedCount) {
+      await collection.updateOne(
+        { _id: product._id },
+        { $set: { images: imported.images, colorImages: imported.colorImages, updatedAt: now } }
+      );
+    }
+    return {
+      message: imported.importedCount
+        ? 'تم حفظ ' + imported.importedCount + ' صورة داخل مكتبة صور الإدارة.'
+        : 'صور هذا المنتج محفوظة بالفعل أو لا توجد روابط صور قابلة للاستيراد.',
+      importedCount: imported.importedCount
+    };
+  }
+
   if (action === 'save-product') {
     const fields = readProductPayload(body);
     const category = await db.collection<StoreCategory>('categories').findOne({ _id: new ObjectId(fields.categoryId), deleted: { $ne: true } });
@@ -259,6 +410,8 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
       const existing = await db.collection<StoredProduct>('products').findOne({ _id: new ObjectId(id), deleted: { $ne: true } });
       if (!existing) throw new Error('المنتج غير موجود أو تم حذفه.');
       const hasOldPrice = Number.isFinite(fields.oldPrice) && fields.oldPrice > fields.price;
+      const previousMediaRefs = productAdminMediaRefs(existing);
+      const nextMediaRefs = new Set(productAdminMediaRefs(update));
       await db.collection('products').updateOne(
         { _id: existing._id },
         {
@@ -266,6 +419,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
           $unset: { colorMask: '', ...(!hasOldPrice ? { oldPrice: '' } : {}) }
         }
       );
+      await removeUnusedAdminMedia(db, previousMediaRefs.filter((ref) => !nextMediaRefs.has(ref)));
       return { message: 'تم تحديث المنتج.' };
     }
     const product: StoredProduct = {
@@ -286,8 +440,10 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     const collection = db.collection<StoredProduct>('products');
     const existing = await collection.findOne({ _id: new ObjectId(id) });
     if (!existing) throw new Error('المنتج غير موجود.');
+    const previousMediaRefs = productAdminMediaRefs(existing);
     if (existing.seedId) await collection.updateOne({ _id: existing._id }, { $set: { deleted: true, updatedAt: now } });
     else await collection.deleteOne({ _id: existing._id });
+    await removeUnusedAdminMedia(db, previousMediaRefs);
     return { message: 'تم حذف المنتج من المتجر.' };
   }
 
