@@ -667,3 +667,107 @@ export async function discoverAlBragProductUrls(): Promise<SourceDiscoveryResult
 
   return { urls, scannedSitemaps, scannedPages, warnings };
 }
+
+/**
+ * Discover only the products exposed by a specific al-brag catalog category.
+ * Pagination links are followed conservatively and the optional supplied
+ * product URL is included explicitly, even if the category page lazy-loads it.
+ */
+export async function discoverAlBragCategoryProductUrls(
+  rawCategoryUrl: string,
+  sampleProductUrl = ""
+): Promise<SourceDiscoveryResult & { categoryOverride: string }> {
+  let categoryUrl: URL;
+  try {
+    categoryUrl = new URL(rawCategoryUrl.trim());
+  } catch {
+    throw new Error("أدخل رابط قسم صحيحًا من موقع البرق المضيء.");
+  }
+
+  if (
+    categoryUrl.protocol !== "https:"
+    || !SOURCE_HOSTS.has(categoryUrl.hostname.toLowerCase())
+    || categoryUrl.pathname.replace(/\\/+$/, "") !== "/catalog"
+    || categoryUrl.username
+    || categoryUrl.password
+  ) {
+    throw new Error("رابط القسم يجب أن يكون من al-brag-ksa.store وبمسار /catalog.");
+  }
+
+  const categorySlug = (categoryUrl.searchParams.get("category") || "").trim();
+  if (!categorySlug) throw new Error("رابط القسم لا يحتوي على category.");
+  categoryUrl.hash = "";
+  const categoryOverride = decodeURIComponent(categorySlug.replace(/\\+/g, " "))
+    .replace(/[-_]+/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  if (!categoryOverride) throw new Error("تعذر تحديد اسم القسم من الرابط.");
+
+  const warnings: string[] = [];
+  const pages = new Set<string>([categoryUrl.toString()]);
+  const visited = new Set<string>();
+  const productUrls = new Set<string>();
+  let scannedPages = 0;
+
+  const suppliedProductUrl = sampleProductUrl.trim();
+  if (suppliedProductUrl) {
+    const normalized = normalizeSourceUrl(suppliedProductUrl, categoryUrl);
+    if (!normalized) throw new Error("رابط المنتج الإضافي يجب أن يكون بصيغة /product2/رقم من الموقع نفسه.");
+    productUrls.add(normalized);
+  }
+
+  while (pages.size && visited.size < 30 && productUrls.size < 2000) {
+    const pageUrlText = pages.values().next().value as string;
+    pages.delete(pageUrlText);
+    if (visited.has(pageUrlText)) continue;
+    visited.add(pageUrlText);
+
+    try {
+      const page = await fetchSourceDocument(pageUrlText);
+      scannedPages += 1;
+      for (const productUrl of collectProductLinks(page.text, page.url)) productUrls.add(productUrl);
+
+      for (const tag of page.text.match(/<a\\b[^>]*>/gi) || []) {
+        const href = readAttribute(tag, "href");
+        if (!href) continue;
+        try {
+          const candidate = new URL(href, page.url);
+          if (
+            candidate.protocol !== "https:"
+            || !SOURCE_HOSTS.has(candidate.hostname.toLowerCase())
+            || candidate.pathname.replace(/\\/+$/, "") !== "/catalog"
+            || candidate.searchParams.get("category") !== categorySlug
+          ) continue;
+
+          const rel = readAttribute(tag, "rel").toLowerCase();
+          const className = (readAttribute(tag, "class") + " " + readAttribute(tag, "aria-label")).toLowerCase();
+          const hasPageParameter = ["page", "p", "paged", "pageNumber", "page_number"]
+            .some((key) => candidate.searchParams.has(key));
+          const isNextLink = /next|التالي|pagination|page-link/.test(rel + " " + className);
+          if (!hasPageParameter && !isNextLink) continue;
+
+          candidate.hash = "";
+          const nextPage = candidate.toString();
+          if (!visited.has(nextPage) && pages.size + visited.size < 30) pages.add(nextPage);
+        } catch {
+          // Ignore malformed or external pagination links.
+        }
+      }
+    } catch (error) {
+      warnings.push("تعذر قراءة صفحة القسم " + pageUrlText + ": " + (error instanceof Error ? error.message : "خطأ غير معروف"));
+    }
+  }
+
+  const urls = [...productUrls].sort((a, b) => {
+    const left = Number(a.match(/\\/product2\\/(\\d+)/i)?.[1] || 0);
+    const right = Number(b.match(/\\/product2\\/(\\d+)/i)?.[1] || 0);
+    return left - right;
+  }).slice(0, 2000);
+
+  if (!urls.length) {
+    warnings.push("لم يتم العثور على روابط منتجات في صفحة القسم. قد يكون الموقع يعرض المنتجات عبر JavaScript أو يتطلب تحققًا إضافيًا.");
+  }
+
+  return { urls, scannedSitemaps: 0, scannedPages, warnings, categoryOverride };
+}
