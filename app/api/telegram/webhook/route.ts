@@ -2335,8 +2335,7 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
       price: 'السعر الحالي: ' + product.price + ' ر.س\n\nأرسل السعر الجديد بالريال.',
       details: 'التفاصيل الحالية:\n' + product.details + '\n\nأرسل التفاصيل الجديدة.',
 
-      specifications: 'المواصفات الحالية:\n' + ((product.specifications || []).map((item, index) => (index + 1) + '. ' + item).join('\n') || 'لا توجد مواصفات مسجلة.') + '\n\nأرسل المواصفات الجديدة، كل مواصفة في سطر أو افصل بينها بفاصلة. اكتب «تخطي» لمسح المواصفات.'
-,
+      specifications: 'المواصفات الحالية:\n' + ((product.specifications || []).map((item, index) => (index + 1) + '. ' + item).join('\n') || 'لا توجد مواصفات مسجلة.') + '\n\nأرسل المواصفات الجديدة، كل مواصفة في سطر أو افصل بينها بفاصلة. اكتب «تخطي» لمسح المواصفات.',
       oldPrice: 'السعر السابق الحالي: ' + (product.oldPrice || 'غير موجود') + ' ر.س\n\nأرسل سعرًا أعلى من السعر الأساسي، أو اكتب «تخطي» لإزالة السعر السابق.'
     };
     await startFlow(db, callback.from.id, chatId, 'edit_product', step, { productId: id }, prompts[field || 'name'] || 'أرسل القيمة الجديدة.');
