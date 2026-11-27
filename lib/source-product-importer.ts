@@ -96,6 +96,23 @@ function normalizeAmount(value: unknown): number | undefined {
   return Number.isFinite(amount) && amount > 0 ? amount : undefined;
 }
 
+function readPriceFromHtml(html: string): number | undefined {
+  const tags = html.match(/<([a-z0-9]+)\b[^>]*(?:itemprop=["']price["']|class=["'][^"']*price[^"']*["'])[^>]*>/gi) || [];
+  for (const tag of tags) {
+    const direct = normalizeAmount(readAttribute(tag, "content") || readAttribute(tag, "data-price") || readAttribute(tag, "value"));
+    if (direct) return direct;
+    const tagName = tag.match(/^<([a-z0-9]+)/i)?.[1];
+    if (!tagName) continue;
+    const start = html.indexOf(tag) + tag.length;
+    const close = html.toLowerCase().indexOf("</" + tagName.toLowerCase() + ">", start);
+    if (close >= start) {
+      const amount = normalizeAmount(stripHtml(html.slice(start, close)));
+      if (amount) return amount;
+    }
+  }
+  return undefined;
+}
+
 function walkObjects(value: unknown, output: JsonRecord[] = [], seen = new Set<object>()): JsonRecord[] {
   if (!value || typeof value !== "object" || seen.has(value as object)) return output;
   seen.add(value as object);
@@ -287,6 +304,7 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
   }
 
   url.hash = "";
+  url.search = "";
   const { html, finalUrl } = await fetchProductHtml(url);
   const jsonLdNodes: JsonRecord[] = [];
   for (const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
@@ -323,12 +341,10 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
     ?? priceFromOffers(firstVariantOffers)
     ?? normalizeAmount(readMeta(html, "product:price:amount"))
     ?? normalizeAmount(readMeta(html, "og:price:amount"))
-    ?? (() => {
-      const priceTag = (html.match(/<(?:meta|span|div)[^>]*(?:itemprop=["']price["']|class=["'][^"']*price[^"']*["'])[^>]*>/gi) || [])
-        .map((tag) => readAttribute(tag, "content") || readAttribute(tag, "data-price") || stripHtml(tag))
-        .find((value) => normalizeAmount(value));
-      return normalizeAmount(priceTag);
-    })();
+    ?? readPriceFromHtml(html);
+  const oldPrice = normalizeAmount(readMeta(html, "product:price:standard_amount"))
+    ?? normalizeAmount(readMeta(html, "product:price:original_amount"))
+    ?? normalizeAmount(readMeta(html, "product:price:old_amount"));
 
   if (!title) {
     throw new Error("تم فتح الموقع، لكن لم أستطع استخراج اسم المنتج من الصفحة.");
@@ -338,10 +354,24 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
   }
 
   const images: string[] = [];
+  const galleryImageCandidates = (html.match(/<img\b[^>]*>/gi) || []).flatMap((tag) => {
+    const context = (readAttribute(tag, "class") + " " + readAttribute(tag, "id") + " " + readAttribute(tag, "alt")).toLowerCase();
+    if (!/product|gallery|zoom|detail|main-image|صورة المنتج/.test(context)) return [];
+    const srcset = readAttribute(tag, "srcset").split(",")[0]?.trim().split(/\s+/)[0] || "";
+    return [
+      readAttribute(tag, "data-large_image"),
+      readAttribute(tag, "data-zoom-image"),
+      readAttribute(tag, "data-src"),
+      readAttribute(tag, "data-original"),
+      srcset,
+      readAttribute(tag, "src")
+    ].filter(Boolean);
+  });
   for (const candidate of [
     ...stringList(product?.image),
     readMeta(html, "og:image"),
-    readMeta(html, "twitter:image")
+    readMeta(html, "twitter:image"),
+    ...galleryImageCandidates
   ]) {
     const resolved = imageUrl(candidate, finalUrl.toString());
     if (resolved) addUnique(images, resolved, MAX_IMAGES);
@@ -392,20 +422,25 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
     readMeta(html, "article:section")
   ).slice(0, 120) || "منتجات مستوردة";
 
+  const brand = firstString(product?.brand?.name, product?.brand);
+  const sku = firstString(product?.sku, product?.mpn);
+  const barcode = firstString(product?.gtin13, product?.gtin12, product?.gtin14, product?.gtin);
+  if (brand) addUnique(specifications, "الماركة: " + brand, 40);
+  if (sku) addUnique(specifications, "رمز المنتج: " + sku, 40);
+  if (barcode) addUnique(specifications, "الباركود: " + barcode, 40);
+
   const details = [
     description,
     specifications.length ? "مواصفات المنتج:\n" + specifications.join("\n") : ""
   ].filter(Boolean).join("\n\n").slice(0, 3000);
   const shortDescription = (description || specifications.slice(0, 3).join("، ") || title).slice(0, 300);
-  const brand = firstString(product?.brand?.name, product?.brand);
-  const sku = firstString(product?.sku, product?.mpn);
-  const barcode = firstString(product?.gtin13, product?.gtin12, product?.gtin14, product?.gtin);
 
   return {
     sourceProductUrl: finalUrl.toString(),
     sourceStore: "al-brag-ksa.store",
     name: title.slice(0, 120),
     price,
+    ...(oldPrice && oldPrice > price ? { oldPrice } : {}),
     shortDescription,
     details: details || shortDescription,
     specifications,
