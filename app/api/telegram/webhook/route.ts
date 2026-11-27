@@ -13,7 +13,7 @@ import {
 } from '@/lib/telegram';
 import { formatOrderForAdmin, getRecentOrders, makeOrderNumber, type StoreOrder } from '@/lib/orders';
 import { isPhoneCaseProduct } from '@/lib/phone-case';
-import { importAlBragProduct } from '@/lib/source-product-importer';
+import { discoverAlBragProductUrls, importAlBragProduct } from '@/lib/source-product-importer';
 import siteLogo from '@/wrwerwe.jpg';
 
 export const runtime = 'nodejs';
@@ -79,6 +79,12 @@ type FlowData = {
   shortDescription?: string;
   specifications?: string[];
   oldPrice?: number;
+  productUrls?: string[];
+  batchCursor?: number;
+  batchImported?: number;
+  batchSkipped?: number;
+  batchFailed?: number;
+  batchErrors?: string[];
 };
 
 type FlowStep =
@@ -88,12 +94,12 @@ type FlowStep =
   | 'edit_product_storage_add' | 'edit_product_storage_select_edit' | 'edit_product_storage_edit_value' | 'edit_product_storage_select_delete'
   | 'contact_whatsapp' | 'cancel_reason' | 'slider_image' | 'footer_edit_text' | 'footer_confirm_save'
   | 'footer_vat_number' | 'brand_project_name' | 'footer_icon_image' | 'footer_icon_link'
-  | 'store_logo_image' | 'search_products' | 'import_product_url' | 'import_product_preview' | 'edit_product_specifications';
+  | 'store_logo_image' | 'search_products' | 'import_product_url' | 'import_product_preview' | 'edit_product_specifications' | 'import_catalog_confirm' | 'import_catalog_batch';
 
 type AdminSession = {
   telegramUserId: number;
   chatId: number;
-  workflow: 'add_section' | 'rename_section' | 'move_section' | 'add_product' | 'edit_product' | 'edit_product_search' | 'import_product' | 'contact' | 'cancel_order' | 'slider' | 'footer_content' | 'footer_settings' | 'store_logo';
+  workflow: 'add_section' | 'rename_section' | 'move_section' | 'add_product' | 'edit_product' | 'edit_product_search' | 'import_product' | 'import_catalog' | 'contact' | 'cancel_order' | 'slider' | 'footer_content' | 'footer_settings' | 'store_logo';
   step: FlowStep;
   data: FlowData;
   updatedAt: Date;
@@ -105,6 +111,7 @@ const MENU_EDIT_SECTION = 'تعديل قسم';
 const MENU_ADD_PRODUCT = 'إضافة منتج';
 const MENU_EDIT_PRODUCT = 'تعديل المنتج';
 const MENU_IMPORT_PRODUCT = 'استيراد منتج من رابط';
+const MENU_IMPORT_CATALOG = 'استيراد كتالوج الموقع';
 const MENU_CONTACT = 'الاتصال';
 const MENU_SLIDER = 'السلايدر';
 const MENU_POLICIES = 'السياسات';
@@ -1995,6 +2002,163 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     await sendMainMenu(db, chatId, 'تم إلغاء استيراد المنتج، ولم يتم حفظ أي بيانات.');
     return;
   }
+  if (action === 'import-catalog-start' || action === 'import-catalog-next') {
+    const session = await db.collection<AdminSession>('telegram_sessions').findOne({
+      telegramUserId: callback.from.id,
+      workflow: 'import_catalog',
+      step: 'import_catalog_batch'
+    });
+    if (!session || !Array.isArray(session.data.productUrls) || !session.data.productUrls.length) {
+      await sendTelegramMessage(chatId, 'انتهت جلسة استيراد الكتالوج. ابدأ اكتشاف المنتجات مرة أخرى.');
+      return;
+    }
+
+    const urls = session.data.productUrls;
+    const cursor = Math.max(0, session.data.batchCursor || 0);
+    const nextUrls = urls.slice(cursor, cursor + 3);
+    if (!nextUrls.length) {
+      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+      await sendTelegramMessage(chatId, 'انتهى استيراد الكتالوج بالفعل.');
+      return;
+    }
+
+    const parsedResults = await Promise.all(nextUrls.map(async (url) => {
+      try {
+        return { url, product: await importAlBragProduct(url), error: '' };
+      } catch (error) {
+        return { url, product: null, error: error instanceof Error ? error.message : 'تعذر قراءة المنتج.' };
+      }
+    }));
+
+    const categories = new Map<string, Promise<StoreCategory>>();
+    const ensureCategory = (rawName: string) => {
+      const name = (rawName || 'منتجات مستوردة').trim().slice(0, 120) || 'منتجات مستوردة';
+      const key = name.toLocaleLowerCase('ar');
+      const current = categories.get(key);
+      if (current) return current;
+
+      const pending = (async () => {
+        let section = await db.collection<StoreCategory>('categories').findOne({
+          name,
+          deleted: { $ne: true }
+        });
+        if (section) return section;
+
+        const now = new Date();
+        const sectionId = new ObjectId();
+        const description = 'قسم أُنشئ عند استيراد المنتجات من al-brag-ksa.store';
+        await db.collection<StoreCategory>('categories').insertOne({
+          _id: sectionId,
+          name,
+          description,
+          createdAt: now,
+          updatedAt: now,
+          deleted: false
+        });
+        return {
+          _id: sectionId,
+          name,
+          description,
+          createdAt: now,
+          updatedAt: now,
+          deleted: false
+        } as StoreCategory;
+      })();
+      categories.set(key, pending);
+      return pending;
+    };
+
+    const outcomes = await Promise.all(parsedResults.map(async (result) => {
+      if (!result.product) return { state: 'failed' as const, name: result.url, error: result.error };
+      const imported = result.product;
+      const existing = await db.collection<StoredProduct>('products').findOne({
+        sourceProductUrl: imported.sourceProductUrl
+      });
+      if (existing) return { state: 'skipped' as const, name: imported.name, error: '' };
+
+      try {
+        const section = await ensureCategory(imported.sourceCategory);
+        const now = new Date();
+        await db.collection<StoredProduct>('products').insertOne({
+          _id: new ObjectId(),
+          categoryId: section._id.toHexString(),
+          category: section.name,
+          name: imported.name,
+          price: imported.price,
+          ...(imported.oldPrice && imported.oldPrice > imported.price ? { oldPrice: imported.oldPrice } : {}),
+          shortDescription: imported.shortDescription,
+          details: imported.details,
+          specifications: imported.specifications.slice(0, 40),
+          colors: imported.colors.slice(0, 30),
+          storageOptions: imported.storageOptions.slice(0, 30),
+          ...(Object.keys(imported.storagePrices).length ? { storagePrices: imported.storagePrices } : {}),
+          images: imported.images.slice(0, 10),
+          sourceImageUrls: imported.images.slice(0, 10),
+          sourceStore: imported.sourceStore,
+          sourceProductUrl: imported.sourceProductUrl,
+          sourceBrand: imported.sourceBrand,
+          sourceSku: imported.sourceSku,
+          sourceBarcode: imported.sourceBarcode,
+          sourceImportedAt: now,
+          createdByTelegramId: callback.from.id,
+          createdAt: now,
+          updatedAt: now
+        });
+        return { state: 'imported' as const, name: imported.name, error: '' };
+      } catch (error) {
+        return { state: 'failed' as const, name: imported.name, error: error instanceof Error ? error.message : 'تعذر حفظ المنتج.' };
+      }
+    }));
+
+    session.data.batchCursor = cursor + nextUrls.length;
+    session.data.batchImported = (session.data.batchImported || 0) + outcomes.filter((item) => item.state === 'imported').length;
+    session.data.batchSkipped = (session.data.batchSkipped || 0) + outcomes.filter((item) => item.state === 'skipped').length;
+    session.data.batchFailed = (session.data.batchFailed || 0) + outcomes.filter((item) => item.state === 'failed').length;
+    session.data.batchErrors = [
+      ...(session.data.batchErrors || []),
+      ...outcomes.filter((item) => item.state === 'failed').map((item) => item.name + ': ' + item.error)
+    ].slice(-10);
+
+    const done = session.data.batchCursor >= urls.length;
+    const report = [
+      done ? '✅ انتهت دفعة استيراد الكتالوج.' : 'تمت معالجة دفعة جديدة من الكتالوج.',
+      'تم فحص: ' + session.data.batchCursor + ' من ' + urls.length,
+      'تم استيراده: ' + (session.data.batchImported || 0),
+      'مكرر وتم تخطيه: ' + (session.data.batchSkipped || 0),
+      'فشل: ' + (session.data.batchFailed || 0),
+      '',
+      ...outcomes.map((item) =>
+        (item.state === 'imported' ? '✅ ' : item.state === 'skipped' ? '↪️ ' : '❌ ')
+        + item.name.slice(0, 110)
+        + (item.state === 'failed' ? ' — ' + item.error.slice(0, 180) : '')
+      )
+    ];
+
+    if (done) {
+      if (session.data.batchErrors?.length) {
+        report.push('', 'آخر الأخطاء:', ...session.data.batchErrors.slice(-5).map((item) => '• ' + item.slice(0, 250)));
+      }
+      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+      await sendMainMenu(db, chatId, report.join('\n'));
+      return;
+    }
+
+    await saveSession(db, session);
+    await sendTelegramMessage(chatId, report.join('\n') + '\n\nاضغط لاستيراد الدفعة التالية (3 منتجات):', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'استكمال استيراد الكتالوج', callback_data: 'import-catalog-next' }],
+          [{ text: 'إيقاف الاستيراد', callback_data: 'import-catalog-stop' }]
+        ]
+      }
+    });
+    return;
+  }
+  if (action === 'import-catalog-stop') {
+    await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+    await sendMainMenu(db, chatId, 'تم إيقاف استيراد الكتالوج. المنتجات التي تم استيرادها بالفعل محفوظة.');
+    return;
+  }
   if (action === 'import-product-confirm') {
     const session = await db.collection<AdminSession>('telegram_sessions').findOne({
       telegramUserId: callback.from.id,
@@ -3346,6 +3510,60 @@ async function handleUpdate(db: Db, update: TelegramUpdate) {
   if (value === MENU_EDIT_PRODUCT) {
     await db.collection('telegram_sessions').deleteOne({ telegramUserId: from.id });
     await listProductSectionsForEdit(db, chatId);
+    return;
+  }
+  if (value === MENU_IMPORT_CATALOG) {
+    await db.collection('telegram_sessions').deleteOne({ telegramUserId: from.id });
+    await sendTelegramMessage(chatId, 'أفحص الآن خرائط الموقع والروابط العامة لاكتشاف المنتجات. لن يتم حفظ أي منتج قبل ظهور نتيجة الاكتشاف.');
+    try {
+      const discovery = await discoverAlBragProductUrls();
+      const urls = [...new Set(discovery.urls)].slice(0, 2000);
+      if (!urls.length) {
+        await sendTelegramMessage(
+          chatId,
+          'لم أجد روابط منتجات قابلة للاستيراد تلقائيًا.\\n'
+          + 'خرائط الموقع التي فُحصت: ' + discovery.scannedSitemaps + '\\n'
+          + 'الصفحات العامة التي فُحصت: ' + discovery.scannedPages + '\\n'
+          + (discovery.warnings.slice(0, 5).join('\\n') || 'الموقع قد يحتاج إلى طريقة تصفح أخرى أو قائمة روابط المنتجات.')
+        );
+        return;
+      }
+
+      const session: AdminSession = {
+        telegramUserId: from.id,
+        chatId,
+        workflow: 'import_catalog',
+        step: 'import_catalog_confirm',
+        data: {
+          productUrls: urls,
+          batchCursor: 0,
+          batchImported: 0,
+          batchSkipped: 0,
+          batchFailed: 0,
+          batchErrors: []
+        },
+        updatedAt: new Date()
+      };
+      await saveSession(db, session);
+      await sendTelegramMessage(
+        chatId,
+        'تم اكتشاف روابط المنتجات.\\n\\n'
+        + 'عدد الروابط الفريدة: ' + urls.length + '\\n'
+        + 'خرائط الموقع التي فُحصت: ' + discovery.scannedSitemaps + '\\n'
+        + 'الصفحات العامة التي فُحصت: ' + discovery.scannedPages + '\\n\\n'
+        + 'سيتم الاستيراد على دفعات من 3 منتجات، مع تخطي أي منتج مستورد سابقًا. هل تبدأ؟',
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ ابدأ استيراد المنتجات', callback_data: 'import-catalog-start' }],
+              [{ text: 'إلغاء', callback_data: 'import-catalog-stop' }]
+            ]
+          }
+        }
+      );
+    } catch (error) {
+      await sendTelegramMessage(chatId, 'تعذر اكتشاف كتالوج الموقع: ' + (error instanceof Error ? error.message : 'خطأ غير معروف'));
+    }
     return;
   }
   if (value === MENU_IMPORT_PRODUCT) {
