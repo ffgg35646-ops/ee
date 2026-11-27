@@ -182,7 +182,9 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
   const [query, setQuery] = useState('');
   const [productEditor, setProductEditor] = useState<ProductRow | null | false>(false);
   const [categoryEditor, setCategoryEditor] = useState<CategoryRow | null | false>(false);
-  const [singleUrl, setSingleUrl] = useState('');\n  const [categoryUrl, setCategoryUrl] = useState('https://www.al-brag-ksa.store/catalog?category=Apple-iPhone-18-Pro-Max');\n  const [categorySampleUrl, setCategorySampleUrl] = useState('https://www.al-brag-ksa.store/product2/1902');
+  const [singleUrl, setSingleUrl] = useState('');
+  const [categoryUrl, setCategoryUrl] = useState('https://www.al-brag-ksa.store/catalog?category=Apple-iPhone-18-Pro-Max');
+  const [categorySampleUrl, setCategorySampleUrl] = useState('https://www.al-brag-ksa.store/product2/1902');
   const [singlePreview, setSinglePreview] = useState<Record<string, unknown> | null>(null);
   const [caseMaskLinks, setCaseMaskLinks] = useState<Record<string, string>>({});
   const [singleBusy, setSingleBusy] = useState(false);
