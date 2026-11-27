@@ -28,6 +28,7 @@ export type CatalogImportJob = {
   createdAt: Date;
   updatedAt: Date;
   startedBy?: string;
+  categoryOverride?: string;
   lastBatch?: CatalogImportOutcome[];
 };
 
@@ -54,7 +55,7 @@ export async function getCatalogImportJob(db: Db) {
 export async function startCatalogImportJob(
   db: Db,
   urls: string[],
-  discovery: { scannedSitemaps?: number; scannedPages?: number; warnings?: string[] } = {},
+  discovery: { scannedSitemaps?: number; scannedPages?: number; warnings?: string[]; categoryOverride?: string } = {},
   startedBy = 'web'
 ) {
   const uniqueUrls = [...new Set(urls)].filter((url) => /^https:\/\/(?:www\.)?al-brag-ksa\.store\/product2\/\d+\/?$/i.test(url)).slice(0, 2000);
@@ -76,7 +77,8 @@ export async function startCatalogImportJob(
     warnings: Array.isArray(discovery.warnings) ? discovery.warnings.slice(0, 20) : [],
     createdAt: now,
     updatedAt: now,
-    startedBy
+    startedBy,
+    ...(discovery.categoryOverride ? { categoryOverride: discovery.categoryOverride.slice(0, 120) } : {})
   };
   await db.collection<CatalogImportJob>('catalog_import_jobs').replaceOne(
     { _id: AL_BRAG_IMPORT_JOB_ID },
@@ -201,6 +203,7 @@ export async function processNextCatalogImportBatch(db: Db, batchSize = 3) {
       continue;
     }
     try {
+      if (job.categoryOverride) item.imported.sourceCategory = job.categoryOverride;
       outcomes.push(await saveImportedSourceProduct(db, item.imported, job.startedBy || 'web'));
     } catch (error) {
       outcomes.push({
