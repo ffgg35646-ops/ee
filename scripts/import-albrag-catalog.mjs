@@ -26,7 +26,7 @@ function strip(value='') {
 }
 function attr(tag,name) {
   const escaped=name.replace(/[.*+?^\${}()|[\]\\]/g,'\\$&');
-  const m=tag.match(new RegExp('\\b'+escaped+'\\s*=\\s*(?:"([^"]*)"|\\'([^\\']*)\\'|([^\\s>]+))','i'));
+  const m=tag.match(new RegExp("\\b"+escaped+"\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))","i"));
   return decode(m?.[1]??m?.[2]??m?.[3]??'').trim();
 }
 function meta(html,key) {
