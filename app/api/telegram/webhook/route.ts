@@ -88,7 +88,7 @@ type FlowStep =
   | 'edit_product_storage_add' | 'edit_product_storage_select_edit' | 'edit_product_storage_edit_value' | 'edit_product_storage_select_delete'
   | 'contact_whatsapp' | 'cancel_reason' | 'slider_image' | 'footer_edit_text' | 'footer_confirm_save'
   | 'footer_vat_number' | 'brand_project_name' | 'footer_icon_image' | 'footer_icon_link'
-  | 'store_logo_image' | 'search_products' | 'import_product_url' | 'import_product_preview';
+  | 'store_logo_image' | 'search_products' | 'import_product_url' | 'import_product_preview' | 'edit_product_specifications';
 
 type AdminSession = {
   telegramUserId: number;
@@ -609,6 +609,7 @@ function editProductKeyboard(id: string, categoryId: string, canPreviewColors = 
       [{ text: 'القسم', callback_data: 'product-field:' + id + ':category' }, { text: 'اسم المنتج', callback_data: 'product-field:' + id + ':name' }],
       [{ text: 'لون مع صور', callback_data: 'product-color-images:' + id }, { text: 'مساحة التخزين', callback_data: 'product-field:' + id + ':storage' }],
       [{ text: 'السعر', callback_data: 'product-field:' + id + ':price' }, { text: 'تفاصيل المنتج', callback_data: 'product-field:' + id + ':details' }],
+      [{ text: 'مواصفات المنتج', callback_data: 'product-field:' + id + ':specifications' }],
       ...(canPreviewColors ? [[{
         text: hasColorMask ? '🖌️ إعادة تحديد الكفر مجانًا' : '🖌️ تحديد الكفر مجانًا',
         callback_data: 'product-mask-editor:' + id
@@ -638,6 +639,9 @@ async function showProductEditMenu(db: Db, chatId: number, id: string) {
     'لون مع صور: ' + ((product.colors || []).map((color) => color + ((product.colorImages || {})[color] ? ' ✓' : '')).join('، ') || 'غير محدد'),
     'مساحات التخزين: ' + ((product.storageOptions || []).map((storage) => storage + (product.storagePrices?.[storage] ? ' — ' + product.storagePrices[storage].toLocaleString('en-US') + ' ر.س' : '')).join('، ') || 'غير محدد'),
     'السعر: ' + product.price.toLocaleString('en-US') + ' ر.س',
+    'عدد المواصفات: ' + (product.specifications || []).length,
+    ...(product.sourceProductUrl ? ['المصدر: ' + product.sourceProductUrl] : []),
+    ...(product.sourceBrand ? ['الماركة المستخرجة: ' + product.sourceBrand] : []),
     'معاينة تغيير لون الجراب: ' + (product.colorMask ? 'جاهزة ✅' : 'غير مجهزة'),
     '',
     'اختر الخانة التي تريد تعديلها. زر الحذف موجود بالأسفل.'
@@ -1112,6 +1116,13 @@ async function saveEditedField(db: Db, session: AdminSession, value: string, cha
   } else if (session.step === 'edit_product_details') {
     if (value.length < 2 || value.length > 3000) return void await sendTelegramMessage(chatId, 'التفاصيل يجب أن تكون من حرفين إلى 3000 حرف.');
     update = { details: value };
+  } else if (session.step === 'edit_product_specifications') {
+    if (value.length > 4000) return void await sendTelegramMessage(chatId, 'إجمالي نص المواصفات يتجاوز 4000 حرف.');
+    const specifications = value === 'تخطي'
+      ? []
+      : [...new Set(value.split(/[\\r\\n,،;؛]+/).map((item) => item.replace(/^\\s*(?:[-•*]|\\d+[.)-])\\s*/, '').trim()).filter(Boolean))].slice(0, 40);
+    if (specifications.some((item) => item.length > 300)) return void await sendTelegramMessage(chatId, 'كل مواصفة يجب ألا تتجاوز 300 حرف.');
+    update = { specifications };
   } else {
     await sendTelegramMessage(chatId, 'حقل التعديل غير معروف.');
     return;
@@ -2262,7 +2273,7 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     if (!product) return void await sendTelegramMessage(chatId, 'لم يتم العثور على المنتج.');
     const fieldToStep: Record<string, FlowStep> = {
       name: 'edit_product_name', colors: 'edit_product_colors', storage: 'edit_product_storage',
-      price: 'edit_product_price', details: 'edit_product_details', images: 'edit_product_images'
+      price: 'edit_product_price', details: 'edit_product_details', specifications: 'edit_product_specifications', images: 'edit_product_images'
     };
     if (field === 'storage') {
       await showProductStorageMenu(db, chatId, id);
@@ -2307,7 +2318,10 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
       colors: 'الألوان الحالية: ' + (product.colors || []).join('، ') + '\n\nأرسل الألوان الجديدة مفصولة بفاصلة، أو «تخطي» لمسحها.',
       storage: 'مساحات التخزين الحالية: ' + (product.storageOptions || []).map((storage) => storage + (product.storagePrices?.[storage] ? '=' + product.storagePrices[storage] : '')).join('، ') + '\n\nأرسل المساحات الجديدة بالأسماء التي تريدها، ويمكنك إضافة أي عدد مثل: 500GB، 1 تيرا، 2 تيرا. لتحديد سعر خاص لكل مساحة اكتب الاسم ثم = ثم السعر، مثل: 500GB=5799، 1 تيرا=6799، 2 تيرا=9299. الاسم بدون سعر يستخدم السعر الأساسي. اكتب «تخطي» لمسح الخيارات.',
       price: 'السعر الحالي: ' + product.price + ' ر.س\n\nأرسل السعر الجديد بالريال.',
-      details: 'التفاصيل الحالية:\n' + product.details + '\n\nأرسل التفاصيل الجديدة.'
+      details: 'التفاصيل الحالية:\n' + product.details + '\n\nأرسل التفاصيل الجديدة.',
+
+      specifications: 'المواصفات الحالية:\n' + ((product.specifications || []).map((item, index) => (index + 1) + '. ' + item).join('\n') || 'لا توجد مواصفات مسجلة.') + '\n\nأرسل المواصفات الجديدة، كل مواصفة في سطر أو افصل بينها بفاصلة. اكتب «تخطي» لمسح المواصفات.'
+
     };
     await startFlow(db, callback.from.id, chatId, 'edit_product', step, { productId: id }, prompts[field || 'name'] || 'أرسل القيمة الجديدة.');
     return;
