@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { ObjectId, type Db } from 'mongodb';
 import { importAlBragProduct, type ImportedSourceProduct } from '@/lib/source-product-importer';
 import type { StoreCategory, StoredProduct } from '@/lib/catalog';
+import { fetchRemoteImage } from '@/lib/remote-image';
 
 export const AL_BRAG_IMPORT_JOB_ID = 'al-brag-ksa';
 
@@ -113,6 +114,73 @@ async function ensureImportedCategory(db: Db, rawName: string) {
   return created;
 }
 
+
+const MAX_IMPORTED_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp', 'image/avif']);
+
+/**
+ * Store imported product images in the same MongoDB media collection used by
+ * web-admin uploads. Keep the original URLs separately for provenance/fallback.
+ */
+async function saveImportedImages(
+  db: Db,
+  imported: ImportedSourceProduct,
+  createdBy: string
+): Promise<string[]> {
+  const media = db.collection('admin_media');
+  const references: string[] = [];
+
+  for (const [index, sourceImageUrl] of imported.images.slice(0, 10).entries()) {
+    try {
+      const existing = await media.findOne(
+        { sourceProductUrl: imported.sourceProductUrl, sourceImageUrl },
+        { projection: { _id: 1 } }
+      );
+      if (existing?._id) {
+        references.push('admin-media:' + String(existing._id));
+        continue;
+      }
+
+      const response = await fetchRemoteImage(sourceImageUrl);
+      if (!response.ok) throw new Error('Image download failed: ' + response.status);
+
+      const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (!IMPORTED_IMAGE_TYPES.has(contentType)) throw new Error('Unsupported imported image type');
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.length || bytes.length > MAX_IMPORTED_IMAGE_BYTES) {
+        throw new Error('Imported image is empty or exceeds 8 MB');
+      }
+
+      const id = new ObjectId();
+      await media.insertOne({
+        _id: id,
+        dataBase64: bytes.toString('base64'),
+        contentType,
+        filename: 'al-brag-' + id.toHexString() + '-' + (index + 1),
+        size: bytes.length,
+        sourceProductUrl: imported.sourceProductUrl,
+        sourceImageUrl,
+        sourceProductImageIndex: index,
+        createdAt: new Date(),
+        createdByAdminEmail: createdBy
+      });
+      references.push('admin-media:' + id.toHexString());
+    } catch (error) {
+      // Preserve a usable source URL when the source host blocks an image,
+      // the image exceeds the media limit, or the CDN is temporarily unavailable.
+      references.push(sourceImageUrl);
+      console.warn(
+        'Al-Brag source image was not copied into MongoDB:',
+        sourceImageUrl,
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+    }
+  }
+
+  return references;
+}
+
 export async function saveImportedSourceProduct(
   db: Db,
   imported: ImportedSourceProduct,
@@ -124,6 +192,7 @@ export async function saveImportedSourceProduct(
   if (existing) return { state: 'skipped', name: imported.name };
 
   const section = await ensureImportedCategory(db, imported.sourceCategory);
+  const imageReferences = await saveImportedImages(db, imported, createdBy);
   const now = new Date();
   const product: StoredProduct = {
     _id: new ObjectId(),
@@ -138,7 +207,7 @@ export async function saveImportedSourceProduct(
     colors: imported.colors.slice(0, 30),
     storageOptions: imported.storageOptions.slice(0, 30),
     ...(Object.keys(imported.storagePrices).length ? { storagePrices: imported.storagePrices } : {}),
-    images: imported.images.slice(0, 10),
+    images: imageReferences,
     sourceImageUrls: imported.images.slice(0, 10),
     sourceStore: imported.sourceStore,
     sourceProductUrl: imported.sourceProductUrl,
@@ -154,6 +223,7 @@ export async function saveImportedSourceProduct(
     await products.insertOne(product);
     return { state: 'imported', name: imported.name };
   } catch (error) {
+    await db.collection('admin_media').deleteMany({ sourceProductUrl: imported.sourceProductUrl });
     if (error && typeof error === 'object' && 'code' in error && error.code === 11000) {
       return { state: 'skipped', name: imported.name };
     }
