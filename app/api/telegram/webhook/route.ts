@@ -14,6 +14,7 @@ import {
 import { formatOrderForAdmin, getRecentOrders, makeOrderNumber, type StoreOrder } from '@/lib/orders';
 import { isPhoneCaseProduct } from '@/lib/phone-case';
 import { discoverAlBragProductUrls, importAlBragProduct } from '@/lib/source-product-importer';
+import { getCatalogImportJob, startCatalogImportJob, processNextCatalogImportBatch, stopCatalogImportJob } from '@/lib/source-catalog-jobs';
 import siteLogo from '@/wrwerwe.jpg';
 
 export const runtime = 'nodejs';
@@ -1054,7 +1055,7 @@ async function saveProduct(db: Db, session: AdminSession, chatId: number) {
     ...(Object.keys(data.storagePrices || {}).length ? { storagePrices: data.storagePrices } : {}),
     price: data.price,
     details: data.details,
-    images: storedImages,
+    images: [],
     createdAt: now,
     updatedAt: now
   });
@@ -2003,152 +2004,51 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     return;
   }
   if (action === 'import-catalog-start' || action === 'import-catalog-next') {
-    const session = await db.collection<AdminSession>('telegram_sessions').findOne({
-      telegramUserId: callback.from.id,
-      workflow: 'import_catalog',
-      step: { $in: ['import_catalog_confirm', 'import_catalog_batch'] }
-    });
-    if (!session || !Array.isArray(session.data.productUrls) || !session.data.productUrls.length) {
-      await sendTelegramMessage(chatId, 'انتهت جلسة استيراد الكتالوج. ابدأ اكتشاف المنتجات مرة أخرى.');
-      return;
-    }
-
-    const urls = session.data.productUrls;
-    const cursor = Math.max(0, session.data.batchCursor || 0);
-    const nextUrls = urls.slice(cursor, cursor + 3);
-    if (!nextUrls.length) {
-      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
-      await sendTelegramMessage(chatId, 'انتهى استيراد الكتالوج بالفعل.');
-      return;
-    }
-
-    const parsedResults = await Promise.all(nextUrls.map(async (url) => {
-      try {
-        return { url, product: await importAlBragProduct(url), error: '' };
-      } catch (error) {
-        return { url, product: null, error: error instanceof Error ? error.message : 'تعذر قراءة المنتج.' };
-      }
-    }));
-
-    const categories = new Map<string, Promise<StoreCategory>>();
-    const ensureCategory = (rawName: string) => {
-      const name = (rawName || 'منتجات مستوردة').trim().slice(0, 120) || 'منتجات مستوردة';
-      const key = name.toLocaleLowerCase('ar');
-      const current = categories.get(key);
-      if (current) return current;
-
-      const pending = (async () => {
-        let section = await db.collection<StoreCategory>('categories').findOne({
-          name,
-          deleted: { $ne: true }
-        });
-        if (section) return section;
-
-        const now = new Date();
-        const sectionId = new ObjectId();
-        const description = 'قسم أُنشئ عند استيراد المنتجات من al-brag-ksa.store';
-        await db.collection<StoreCategory>('categories').insertOne({
-          _id: sectionId,
-          name,
-          description,
-          createdAt: now,
-          updatedAt: now,
-          deleted: false
-        });
-        return {
-          _id: sectionId,
-          name,
-          description,
-          createdAt: now,
-          updatedAt: now,
-          deleted: false
-        } as StoreCategory;
-      })();
-      categories.set(key, pending);
-      return pending;
-    };
-
-    const outcomes = await Promise.all(parsedResults.map(async (result) => {
-      if (!result.product) return { state: 'failed' as const, name: result.url, error: result.error };
-      const imported = result.product;
-      const existing = await db.collection<StoredProduct>('products').findOne({
-        sourceProductUrl: imported.sourceProductUrl
+    if (action === 'import-catalog-start') {
+      const session = await db.collection<AdminSession>('telegram_sessions').findOne({
+        telegramUserId: callback.from.id,
+        workflow: 'import_catalog',
+        step: 'import_catalog_confirm'
       });
-      if (existing) return { state: 'skipped' as const, name: imported.name, error: '' };
-
-      try {
-        const section = await ensureCategory(imported.sourceCategory);
-        const now = new Date();
-        await db.collection<StoredProduct>('products').insertOne({
-          _id: new ObjectId(),
-          categoryId: section._id.toHexString(),
-          category: section.name,
-          name: imported.name,
-          price: imported.price,
-          ...(imported.oldPrice && imported.oldPrice > imported.price ? { oldPrice: imported.oldPrice } : {}),
-          shortDescription: imported.shortDescription,
-          details: imported.details,
-          specifications: imported.specifications.slice(0, 40),
-          colors: imported.colors.slice(0, 30),
-          storageOptions: imported.storageOptions.slice(0, 30),
-          ...(Object.keys(imported.storagePrices).length ? { storagePrices: imported.storagePrices } : {}),
-          images: imported.images.slice(0, 10),
-          sourceImageUrls: imported.images.slice(0, 10),
-          sourceStore: imported.sourceStore,
-          sourceProductUrl: imported.sourceProductUrl,
-          sourceBrand: imported.sourceBrand,
-          sourceSku: imported.sourceSku,
-          sourceBarcode: imported.sourceBarcode,
-          sourceImportedAt: now,
-          createdByTelegramId: callback.from.id,
-          createdAt: now,
-          updatedAt: now
-        });
-        return { state: 'imported' as const, name: imported.name, error: '' };
-      } catch (error) {
-        if (error && typeof error === 'object' && 'code' in error && error.code === 11000) {
-          return { state: 'skipped' as const, name: imported.name, error: '' };
-        }
-        return { state: 'failed' as const, name: imported.name, error: error instanceof Error ? error.message : 'تعذر حفظ المنتج.' };
+      if (!session || !Array.isArray(session.data.productUrls) || !session.data.productUrls.length) {
+        await sendTelegramMessage(chatId, 'انتهت جلسة اكتشاف الكتالوج. ابدأ الفحص مرة أخرى.');
+        return;
       }
-    }));
+      await startCatalogImportJob(db, session.data.productUrls, {}, 'telegram:' + callback.from.id);
+      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+    }
 
-    session.step = 'import_catalog_batch';
-    session.data.batchCursor = cursor + nextUrls.length;
-    session.data.batchImported = (session.data.batchImported || 0) + outcomes.filter((item) => item.state === 'imported').length;
-    session.data.batchSkipped = (session.data.batchSkipped || 0) + outcomes.filter((item) => item.state === 'skipped').length;
-    session.data.batchFailed = (session.data.batchFailed || 0) + outcomes.filter((item) => item.state === 'failed').length;
-    session.data.batchErrors = [
-      ...(session.data.batchErrors || []),
-      ...outcomes.filter((item) => item.state === 'failed').map((item) => item.name + ': ' + item.error)
-    ].slice(-10);
+    const result = await processNextCatalogImportBatch(db, 3);
+    if (result.busy) {
+      await sendTelegramMessage(chatId, 'هناك دفعة استيراد قيد التنفيذ من لوحة أخرى. انتظر قليلًا ثم اضغط استكمال.');
+      return;
+    }
+    const job = result.job;
+    if (!job) {
+      await sendTelegramMessage(chatId, 'لا توجد عملية استيراد محفوظة. ابدأ اكتشاف الكتالوج من جديد.');
+      return;
+    }
 
-    const done = session.data.batchCursor >= urls.length;
+    const done = job.status === 'completed' || job.status === 'stopped' || job.status === 'failed';
     const report = [
-      done ? '✅ انتهت دفعة استيراد الكتالوج.' : 'تمت معالجة دفعة جديدة من الكتالوج.',
-      'تم فحص: ' + session.data.batchCursor + ' من ' + urls.length,
-      'تم استيراده: ' + (session.data.batchImported || 0),
-      'مكرر وتم تخطيه: ' + (session.data.batchSkipped || 0),
-      'فشل: ' + (session.data.batchFailed || 0),
+      done ? '✅ انتهت عملية استيراد الكتالوج.' : 'تمت معالجة دفعة من الكتالوج.',
+      'تم فحص: ' + job.cursor + ' من ' + job.urls.length,
+      'تم استيراده: ' + job.imported,
+      'مكرر وتم تخطيه: ' + job.skipped,
+      'فشل: ' + job.failed,
       '',
-      ...outcomes.map((item) =>
+      ...(result.outcomes || []).map((item) =>
         (item.state === 'imported' ? '✅ ' : item.state === 'skipped' ? '↪️ ' : '❌ ')
         + item.name.slice(0, 110)
-        + (item.state === 'failed' ? ' — ' + item.error.slice(0, 180) : '')
+        + (item.state === 'failed' ? ' — ' + (item.error || '').slice(0, 180) : '')
       )
     ];
-
     if (done) {
-      if (session.data.batchErrors?.length) {
-        report.push('', 'آخر الأخطاء:', ...session.data.batchErrors.slice(-5).map((item) => '• ' + item.slice(0, 250)));
-      }
-      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+      if (job.errors?.length) report.push('', 'آخر الأخطاء:', ...job.errors.slice(-5).map((item) => '• ' + item.slice(0, 220)));
       await sendMainMenu(db, chatId, report.join('\n'));
       return;
     }
-
-    await saveSession(db, session);
-    await sendTelegramMessage(chatId, report.join('\n') + '\n\nاضغط لاستيراد الدفعة التالية (3 منتجات):', {
+    await sendTelegramMessage(chatId, report.join('\n') + '\n\nيمكنك استكمال الدفعة التالية من البوت أو لوحة الويب:', {
       reply_markup: {
         inline_keyboard: [
           [{ text: 'استكمال استيراد الكتالوج', callback_data: 'import-catalog-next' }],
@@ -2159,8 +2059,9 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     return;
   }
   if (action === 'import-catalog-stop') {
+    await stopCatalogImportJob(db);
     await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
-    await sendMainMenu(db, chatId, 'تم إيقاف استيراد الكتالوج. المنتجات التي تم استيرادها بالفعل محفوظة.');
+    await sendMainMenu(db, chatId, 'تم إيقاف الاستيراد من قاعدة البيانات المشتركة. المنتجات التي تم حفظها بالفعل ما زالت موجودة.');
     return;
   }
   if (action === 'import-product-confirm') {
