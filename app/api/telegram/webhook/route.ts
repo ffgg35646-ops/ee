@@ -2006,7 +2006,7 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     const session = await db.collection<AdminSession>('telegram_sessions').findOne({
       telegramUserId: callback.from.id,
       workflow: 'import_catalog',
-      step: 'import_catalog_batch'
+      step: { $in: ['import_catalog_confirm', 'import_catalog_batch'] }
     });
     if (!session || !Array.isArray(session.data.productUrls) || !session.data.productUrls.length) {
       await sendTelegramMessage(chatId, 'انتهت جلسة استيراد الكتالوج. ابدأ اكتشاف المنتجات مرة أخرى.');
@@ -2110,6 +2110,7 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
       }
     }));
 
+    session.step = 'import_catalog_batch';
     session.data.batchCursor = cursor + nextUrls.length;
     session.data.batchImported = (session.data.batchImported || 0) + outcomes.filter((item) => item.state === 'imported').length;
     session.data.batchSkipped = (session.data.batchSkipped || 0) + outcomes.filter((item) => item.state === 'skipped').length;
