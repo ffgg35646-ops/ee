@@ -31,6 +31,22 @@ export type CatalogImportJob = {
   lastBatch?: CatalogImportOutcome[];
 };
 
+let sourceProductIndexPromise: Promise<void> | undefined;
+
+async function ensureSourceProductIndex(db: Db) {
+  if (!sourceProductIndexPromise) {
+    sourceProductIndexPromise = db.collection('products')
+      .createIndex({ sourceProductUrl: 1 }, { unique: true, sparse: true })
+      .then(() => undefined);
+  }
+  try {
+    await sourceProductIndexPromise;
+  } catch (error) {
+    sourceProductIndexPromise = undefined;
+    throw error;
+  }
+}
+
 export async function getCatalogImportJob(db: Db) {
   return db.collection<CatalogImportJob>('catalog_import_jobs').findOne({ _id: AL_BRAG_IMPORT_JOB_ID });
 }
@@ -100,6 +116,7 @@ export async function saveImportedSourceProduct(
   imported: ImportedSourceProduct,
   createdBy = 'web'
 ): Promise<CatalogImportOutcome> {
+  await ensureSourceProductIndex(db);
   const products = db.collection<StoredProduct>('products');
   const existing = await products.findOne({ sourceProductUrl: imported.sourceProductUrl });
   if (existing) return { state: 'skipped', name: imported.name };
