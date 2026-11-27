@@ -403,7 +403,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
         errors.push(String(product.name || product._id) + ': ' + (error instanceof Error ? error.message : 'تعذر تنزيل الصورة.'));
       }
     }
-    const remainingCount = Math.max(0, needsImport.length - processedCount + errors.length);
+    const remainingCount = Math.max(0, needsImport.length - processedCount);
     return {
       message: 'تم حفظ ' + importedImages + ' صورة في هذه الدفعة.',
       importedImages,
