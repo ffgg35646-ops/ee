@@ -1120,7 +1120,7 @@ async function saveEditedField(db: Db, session: AdminSession, value: string, cha
     if (value.length > 4000) return void await sendTelegramMessage(chatId, 'إجمالي نص المواصفات يتجاوز 4000 حرف.');
     const specifications = value === 'تخطي'
       ? []
-      : [...new Set(value.split(/[\\r\\n,،;؛]+/).map((item) => item.replace(/^\\s*(?:[-•*]|\\d+[.)-])\\s*/, '').trim()).filter(Boolean))].slice(0, 40);
+      : [...new Set(value.split(/[\r\n,،;؛]+/).map((item) => item.replace(/^\s*(?:[-•*]|\d+[.)-])\s*/, '').trim()).filter(Boolean))].slice(0, 40);
     if (specifications.some((item) => item.length > 300)) return void await sendTelegramMessage(chatId, 'كل مواصفة يجب ألا تتجاوز 300 حرف.');
     update = { specifications };
   } else {
