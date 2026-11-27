@@ -62,11 +62,12 @@ function normalizeSearchValue(value: string | number) {
   return String(value)
     .normalize('NFKC')
     .toLocaleLowerCase('ar')
-    .replace(/[أإآ]/g, 'ا')
+    .replace(/[أإآٱ]/g, 'ا')
     .replace(/ى/g, 'ي')
-    .replace(/[ًٌٍَُِّْـ]/g, '')
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06EDـ]/g, '')
     .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
     .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -84,7 +85,9 @@ function matchesSearch(product: Product, term: string) {
     ...(product.colors || []),
     ...(product.storageOptions || [])
   ];
-  return searchableValues.some((value) => normalizeSearchValue(value).includes(term));
+  const searchableText = normalizeSearchValue(searchableValues.join(' '));
+  // All words must be present, but they may appear in different product fields.
+  return term.split(' ').filter(Boolean).every((word) => searchableText.includes(word));
 }
 
 export type InitialStoreCatalog = {
@@ -114,7 +117,7 @@ export default function StoreHome({
     : catalogStatus === 'loading'
       ? initialCatalog?.categories ?? []
       : [];
-  const isCatalogLoading = catalogStatus === 'loading' && !initialCatalog;
+  const isCatalogLoading = catalogStatus === 'loading';
   const hasCatalogError = catalogStatus === 'error';
   const [search, setSearch] = useState('');
 
@@ -333,9 +336,11 @@ export default function StoreHome({
         }) : (
           <div className="store-no-results">
             <span>⌕</span>
-            <strong>ما لقيناش منتج مطابق للبحث</strong>
-            <p>جرّب اسمًا أو لونًا أو سعرًا مختلفًا.</p>
-            <button type="button" className="store-reset-search" onClick={() => { setSearch(''); setSelectedCategory(''); }}>عرض كل الأقسام</button>
+            <strong>{term || selectedCategory ? 'ما لقيناش منتج مطابق للبحث' : 'لا توجد منتجات متاحة حاليًا'}</strong>
+            <p>{term || selectedCategory ? 'جرّب اسمًا أو لونًا أو سعة تخزين مختلفة.' : 'سيتم عرض المنتجات هنا بمجرد إضافتها إلى كتالوج المتجر.'}</p>
+            {term || selectedCategory ? (
+              <button type="button" className="store-reset-search" onClick={() => { setSearch(''); setSelectedCategory(''); }}>عرض كل المنتجات</button>
+            ) : null}
           </div>
         )}
       </div>
