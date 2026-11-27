@@ -84,7 +84,7 @@ type FlowData = {
 type FlowStep =
   | 'section_name' | 'rename_section' | 'move_section_position'
   | 'product_name' | 'product_colors' | 'product_storage' | 'product_storage_price' | 'product_price' | 'product_details' | 'product_images'
-  | 'edit_product_name' | 'edit_product_colors' | 'edit_product_storage' | 'edit_product_price' | 'edit_product_details' | 'edit_product_images' | 'edit_product_color_image'
+  | 'edit_product_name' | 'edit_product_colors' | 'edit_product_storage' | 'edit_product_price' | 'edit_product_old_price' | 'edit_product_details' | 'edit_product_images' | 'edit_product_color_image'
   | 'edit_product_storage_add' | 'edit_product_storage_select_edit' | 'edit_product_storage_edit_value' | 'edit_product_storage_select_delete'
   | 'contact_whatsapp' | 'cancel_reason' | 'slider_image' | 'footer_edit_text' | 'footer_confirm_save'
   | 'footer_vat_number' | 'brand_project_name' | 'footer_icon_image' | 'footer_icon_link'
@@ -608,8 +608,9 @@ function editProductKeyboard(id: string, categoryId: string, canPreviewColors = 
     inline_keyboard: [
       [{ text: 'القسم', callback_data: 'product-field:' + id + ':category' }, { text: 'اسم المنتج', callback_data: 'product-field:' + id + ':name' }],
       [{ text: 'لون مع صور', callback_data: 'product-color-images:' + id }, { text: 'مساحة التخزين', callback_data: 'product-field:' + id + ':storage' }],
-      [{ text: 'السعر', callback_data: 'product-field:' + id + ':price' }, { text: 'تفاصيل المنتج', callback_data: 'product-field:' + id + ':details' }],
-      [{ text: 'مواصفات المنتج', callback_data: 'product-field:' + id + ':specifications' }],
+      [{ text: 'السعر', callback_data: 'product-field:' + id + ':price' }, { text: 'السعر السابق', callback_data: 'product-field:' + id + ':oldPrice' }],
+      [{ text: 'تفاصيل المنتج', callback_data: 'product-field:' + id + ':details' }, { text: 'مواصفات المنتج', callback_data: 'product-field:' + id + ':specifications' }],
+      [{ text: 'صور المنتج', callback_data: 'product-field:' + id + ':images' }],
       ...(canPreviewColors ? [[{
         text: hasColorMask ? '🖌️ إعادة تحديد الكفر مجانًا' : '🖌️ تحديد الكفر مجانًا',
         callback_data: 'product-mask-editor:' + id
@@ -1097,6 +1098,7 @@ async function saveEditedField(db: Db, session: AdminSession, value: string, cha
     return;
   }
   let update: Record<string, unknown> = {};
+  let unsetOldPrice = false;
   if (session.step === 'edit_product_name') {
     if (value.length < 2 || value.length > 120) return void await sendTelegramMessage(chatId, 'اسم المنتج يجب أن يكون من حرفين إلى 120 حرفًا.');
     update = { name: value };
@@ -1113,6 +1115,17 @@ async function saveEditedField(db: Db, session: AdminSession, value: string, cha
     const price = normalizeAmount(value);
     if (!Number.isFinite(price) || price <= 0 || price > 100000000) return void await sendTelegramMessage(chatId, 'السعر غير صحيح. أرسل رقمًا أكبر من صفر.');
     update = { price };
+  } else if (session.step === 'edit_product_old_price') {
+    if (value === 'تخطي') {
+      unsetOldPrice = true;
+    } else {
+      const oldPrice = normalizeAmount(value);
+      const product = await db.collection<StoredProduct>('products').findOne({ _id: new ObjectId(id), deleted: { $ne: true } });
+      if (!product || !Number.isFinite(oldPrice) || !oldPrice || oldPrice <= product.price || oldPrice > 100000000) {
+        return void await sendTelegramMessage(chatId, 'السعر السابق يجب أن يكون أكبر من السعر الأساسي الحالي. أرسل قيمة صحيحة أو «تخطي».');
+      }
+      update = { oldPrice };
+    }
   } else if (session.step === 'edit_product_details') {
     if (value.length < 2 || value.length > 3000) return void await sendTelegramMessage(chatId, 'التفاصيل يجب أن تكون من حرفين إلى 3000 حرف.');
     update = { details: value };
@@ -1132,8 +1145,8 @@ async function saveEditedField(db: Db, session: AdminSession, value: string, cha
     { _id: new ObjectId(id) },
     {
       $set: { ...update, updatedAt: new Date() },
-      ...(session.step === 'edit_product_storage' && !('storagePrices' in update)
-        ? { $unset: { storagePrices: '' } }
+      ...((session.step === 'edit_product_storage' && !('storagePrices' in update)) || unsetOldPrice
+        ? { $unset: { ...(session.step === 'edit_product_storage' && !('storagePrices' in update) ? { storagePrices: '' } : {}), ...(unsetOldPrice ? { oldPrice: '' } : {}) } }
         : {})
     }
   );
@@ -2274,7 +2287,7 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     if (!product) return void await sendTelegramMessage(chatId, 'لم يتم العثور على المنتج.');
     const fieldToStep: Record<string, FlowStep> = {
       name: 'edit_product_name', colors: 'edit_product_colors', storage: 'edit_product_storage',
-      price: 'edit_product_price', details: 'edit_product_details', specifications: 'edit_product_specifications', images: 'edit_product_images'
+      price: 'edit_product_price', oldPrice: 'edit_product_old_price', details: 'edit_product_details', specifications: 'edit_product_specifications', images: 'edit_product_images'
     };
     if (field === 'storage') {
       await showProductStorageMenu(db, chatId, id);
@@ -2322,7 +2335,8 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
       details: 'التفاصيل الحالية:\n' + product.details + '\n\nأرسل التفاصيل الجديدة.',
 
       specifications: 'المواصفات الحالية:\n' + ((product.specifications || []).map((item, index) => (index + 1) + '. ' + item).join('\n') || 'لا توجد مواصفات مسجلة.') + '\n\nأرسل المواصفات الجديدة، كل مواصفة في سطر أو افصل بينها بفاصلة. اكتب «تخطي» لمسح المواصفات.'
-
+,
+      oldPrice: 'السعر السابق الحالي: ' + (product.oldPrice || 'غير موجود') + ' ر.س\n\nأرسل سعرًا أعلى من السعر الأساسي، أو اكتب «تخطي» لإزالة السعر السابق.'
     };
     await startFlow(db, callback.from.id, chatId, 'edit_product', step, { productId: id }, prompts[field || 'name'] || 'أرسل القيمة الجديدة.');
     return;
