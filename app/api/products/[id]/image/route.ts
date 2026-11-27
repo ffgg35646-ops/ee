@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 import { findStoredProduct, isBlockedCatalogImage } from '@/lib/catalog';
 import { telegramApi } from '@/lib/telegram';
@@ -32,6 +33,23 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     const imageValue = source === 'cover' ? product.imageUrl : color !== null ? product.colorImages?.[color] : product.images?.[index];
     if (!imageValue || isBlockedCatalogImage(imageValue)) {
       return new NextResponse('Image not found', { status: 404 });
+    }
+
+    // Web-admin uploads are stored in MongoDB and referenced by a generated media ID.
+    if (imageValue.startsWith('admin-media:')) {
+      const mediaId = imageValue.slice('admin-media:'.length);
+      if (!ObjectId.isValid(mediaId)) return new NextResponse('Invalid image reference', { status: 404 });
+      const media = await db.collection<{ _id: ObjectId; dataBase64: string; contentType?: string }>('admin_media')
+        .findOne({ _id: new ObjectId(mediaId) });
+      if (!media?.dataBase64) return new NextResponse('Image not available', { status: 404 });
+      return new NextResponse(Buffer.from(media.dataBase64, 'base64'), {
+        status: 200,
+        headers: {
+          'content-type': media.contentType || 'image/jpeg',
+          'cache-control': 'public, max-age=3600, stale-while-revalidate=86400',
+          'x-content-type-options': 'nosniff'
+        }
+      });
     }
 
     // Some importers store HTTP(S) image URLs instead of Telegram file IDs.
