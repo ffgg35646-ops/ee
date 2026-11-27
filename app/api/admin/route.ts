@@ -286,8 +286,14 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     const collection = db.collection<StoredProduct>('products');
     const existing = await collection.findOne({ _id: new ObjectId(id) });
     if (!existing) throw new Error('المنتج غير موجود.');
-    if (existing.seedId) await collection.updateOne({ _id: existing._id }, { $set: { deleted: true, updatedAt: now } });
-    else await collection.deleteOne({ _id: existing._id });
+    if (existing.seedId) {
+      await collection.updateOne({ _id: existing._id }, { $set: { deleted: true, updatedAt: now } });
+    } else {
+      await collection.deleteOne({ _id: existing._id });
+      if (existing.sourceProductUrl) {
+        await db.collection('admin_media').deleteMany({ sourceProductUrl: existing.sourceProductUrl });
+      }
+    }
     return { message: 'تم حذف المنتج من المتجر.' };
   }
 
