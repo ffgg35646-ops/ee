@@ -736,7 +736,7 @@ export async function discoverAlBragCategoryProductUrls(
           if (
             candidate.protocol !== "https:"
             || !SOURCE_HOSTS.has(candidate.hostname.toLowerCase())
-            || candidate.pathname.replace(/\\/+$/, "") !== "/catalog"
+            || candidate.pathname.replace(/\/+$/, "") !== "/catalog"
             || candidate.searchParams.get("category") !== categorySlug
           ) continue;
 
