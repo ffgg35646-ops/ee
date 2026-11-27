@@ -86,7 +86,7 @@ async function readView(db: Awaited<ReturnType<typeof getDb>>, view: string, req
       db.collection('products').countDocuments({ deleted: { $ne: true } }),
       db.collection('categories').countDocuments({ deleted: { $ne: true } }),
       db.collection('orders').countDocuments({}),
-      db.collection('store_banners').countDocuments({}),
+      db.collection('store_banners').countDocuments({ createdBySystem: { $ne: true } }),
       db.collection('customer_reviews').countDocuments({}),
       db.collection('orders').countDocuments({ status: { $in: ['new', 'confirmed'] } }),
       db.collection('orders').countDocuments({ status: 'shipped' }),
@@ -144,7 +144,7 @@ async function readView(db: Awaited<ReturnType<typeof getDb>>, view: string, req
       db.collection<{ _id: string; [key: string]: any }>('store_settings').find({ _id: { $in: ['brand', 'contact', 'footer', 'branding'] } })
         .project({ iconOneImageDataBase64: 0, iconTwoImageDataBase64: 0, iconOneImageSize: 0, iconTwoImageSize: 0 }).toArray(),
       db.collection<{ _id: string; [key: string]: any }>('store_pages').find({}).sort({ _id: 1 }).toArray(),
-      db.collection('store_banners').find({}).sort({ createdAt: 1, _id: 1 }).limit(12).toArray()
+      db.collection('store_banners').find({ createdBySystem: { $ne: true } }).sort({ createdAt: 1, _id: 1 }).limit(12).toArray()
     ]);
     const settingsByKey = Object.fromEntries(settings.map((item) => [String(item._id), item]));
     return {
