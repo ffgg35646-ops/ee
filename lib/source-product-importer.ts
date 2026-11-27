@@ -538,6 +538,10 @@ function collectProductLinks(document: string, pageUrl: URL): string[] {
     const url = normalizeSourceUrl(match[0], pageUrl);
     if (url) found.add(url);
   }
+  for (const match of document.matchAll(/\/product2\/\d+\/?/gi)) {
+    const url = normalizeSourceUrl(match[0], pageUrl);
+    if (url) found.add(url);
+  }
   return [...found];
 }
 
