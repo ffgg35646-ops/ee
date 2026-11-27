@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 
 export const runtime = 'nodejs';
@@ -6,9 +7,11 @@ export const dynamic = 'force-dynamic';
 
 type FooterSettings = {
   _id: string;
+  iconOneMediaId?: string;
   iconOneImageDataBase64?: string;
   iconOneContentType?: string;
   iconOneImageSize?: number;
+  iconTwoMediaId?: string;
   iconTwoImageDataBase64?: string;
   iconTwoContentType?: string;
   iconTwoImageSize?: number;
@@ -29,6 +32,24 @@ export async function GET(
   try {
     const db = await getDb();
     const settings = await db.collection<FooterSettings>('store_settings').findOne({ _id: 'footer' });
+    const mediaId = slot === 'one' ? settings?.iconOneMediaId : settings?.iconTwoMediaId;
+    if (mediaId && ObjectId.isValid(mediaId)) {
+      const media = await db.collection<{ _id: ObjectId; dataBase64: string; contentType?: string; size?: number }>('admin_media')
+        .findOne({ _id: new ObjectId(mediaId) });
+      if (!media?.dataBase64) return new NextResponse('Footer icon not found', { status: 404 });
+      const mediaBytes = Buffer.from(media.dataBase64, 'base64');
+      if (!mediaBytes.length || mediaBytes.length > 8 * 1024 * 1024) return new NextResponse('Footer icon image is invalid', { status: 422 });
+      return new NextResponse(new Uint8Array(mediaBytes), {
+        status: 200,
+        headers: {
+          'content-type': media.contentType?.startsWith('image/') ? media.contentType : 'image/jpeg',
+          'content-length': String(mediaBytes.length),
+          'cache-control': 'public, max-age=31536000, immutable',
+          'x-content-type-options': 'nosniff'
+        }
+      });
+    }
+
     const imageData = slot === 'one' ? settings?.iconOneImageDataBase64 : settings?.iconTwoImageDataBase64;
     const contentType = slot === 'one' ? settings?.iconOneContentType : settings?.iconTwoContentType;
     const imageSize = slot === 'one' ? settings?.iconOneImageSize : settings?.iconTwoImageSize;

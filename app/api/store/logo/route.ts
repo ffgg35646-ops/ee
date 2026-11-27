@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { ObjectId } from 'mongodb';
 import sharp from 'sharp';
 import { getDb } from '@/lib/mongodb';
 import { telegramApi } from '@/lib/telegram';
+import { fetchRemoteImage } from '@/lib/remote-image';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,6 +11,8 @@ export const dynamic = 'force-dynamic';
 type StoreBrandingSettings = {
   _id: string;
   logoFileId?: string;
+  logoMediaId?: string;
+  logoImageUrl?: string;
   logoBackgroundMode?: 'with' | 'without';
 };
 
@@ -99,7 +103,7 @@ async function removeFlatLogoBackground(source: Buffer): Promise<Buffer> {
 }
 
 export async function GET() {
-  if (!process.env.MONGODB_URI || !process.env.TELEGRAM_BOT_TOKEN) {
+  if (!process.env.MONGODB_URI) {
     return new NextResponse('Store logo service not configured', { status: 503 });
   }
 
@@ -107,9 +111,37 @@ export async function GET() {
     const db = await getDb();
     const settings = await db.collection<StoreBrandingSettings>('store_settings')
       .findOne({ _id: 'branding' });
-    if (!settings?.logoFileId) {
-      return new NextResponse('Custom store logo not configured', { status: 404 });
+    if (!settings) return new NextResponse('Custom store logo not configured', { status: 404 });
+
+    const withoutBackground = settings.logoBackgroundMode === 'without';
+    if (typeof settings.logoImageUrl === 'string' && settings.logoImageUrl.trim()) {
+      const image = await fetchRemoteImage(settings.logoImageUrl);
+      image.headers.set('x-store-logo-background', withoutBackground ? 'without' : 'with');
+      image.headers.set('cache-control', 'no-store, max-age=0');
+      return image;
     }
+
+    if (typeof settings.logoMediaId === 'string' && ObjectId.isValid(settings.logoMediaId)) {
+      const media = await db.collection<{ _id: ObjectId; dataBase64: string; contentType?: string }>('admin_media')
+        .findOne({ _id: new ObjectId(settings.logoMediaId) });
+      if (!media?.dataBase64 || Buffer.byteLength(media.dataBase64, 'base64') > 8 * 1024 * 1024) {
+        return new NextResponse('Store logo not available', { status: 404 });
+      }
+      let image: Buffer<ArrayBufferLike> = Buffer.from(media.dataBase64, 'base64');
+      if (withoutBackground) image = await removeFlatLogoBackground(image);
+      return new NextResponse(new Uint8Array(image), {
+        status: 200,
+        headers: {
+          'content-type': withoutBackground ? 'image/png' : (media.contentType || 'image/jpeg'),
+          'x-store-logo-background': withoutBackground ? 'without' : 'with',
+          'cache-control': 'no-store, max-age=0',
+          'x-content-type-options': 'nosniff'
+        }
+      });
+    }
+
+    if (!settings.logoFileId) return new NextResponse('Custom store logo not configured', { status: 404 });
+    if (!process.env.TELEGRAM_BOT_TOKEN) return new NextResponse('Telegram logo service not configured', { status: 503 });
 
     const file = await telegramApi<TelegramFile>('getFile', { file_id: settings.logoFileId });
     if (!file.file_path) return new NextResponse('Store logo not available', { status: 404 });
@@ -121,7 +153,6 @@ export async function GET() {
     if (!telegramResponse.ok) return new NextResponse('Unable to load store logo', { status: 502 });
 
     let image: Buffer<ArrayBufferLike> = Buffer.from(await telegramResponse.arrayBuffer());
-    const withoutBackground = settings.logoBackgroundMode === 'without';
     if (withoutBackground) image = await removeFlatLogoBackground(image);
 
     return new NextResponse(new Uint8Array(image), {

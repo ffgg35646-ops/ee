@@ -48,6 +48,7 @@ export type StoredProduct = Document & {
   sourceBarcode?: string;
   sourceImportedAt?: Date;
   createdByTelegramId?: number;
+  createdByAdminEmail?: string;
   colorMask?: ProductColorMask;
   createdAt: Date;
   updatedAt: Date;

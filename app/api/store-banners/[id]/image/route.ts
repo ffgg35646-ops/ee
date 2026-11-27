@@ -11,6 +11,7 @@ type StoredBannerImage = {
   fileId?: string;
   imageDataBase64?: string;
   contentType?: string;
+  adminMediaId?: string;
 };
 
 const MAX_SLIDER_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -36,6 +37,18 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const db = await getDb();
     const banner = await db.collection<StoredBannerImage>('store_banners').findOne({ _id: new ObjectId(id) });
     if (!banner) return new NextResponse('Image not found', { status: 404 });
+
+    if (typeof banner.adminMediaId === 'string' && ObjectId.isValid(banner.adminMediaId)) {
+      const media = await db.collection<{ _id: ObjectId; dataBase64: string; contentType?: string }>('admin_media')
+        .findOne({ _id: new ObjectId(banner.adminMediaId) });
+      if (!media?.dataBase64 || Buffer.byteLength(media.dataBase64, 'base64') > MAX_SLIDER_IMAGE_BYTES) {
+        return new NextResponse('Stored image is invalid', { status: 404 });
+      }
+      return new NextResponse(Buffer.from(media.dataBase64, 'base64'), {
+        status: 200,
+        headers: imageHeaders(media.contentType || 'image/jpeg')
+      });
+    }
 
     // New uploads are stored with their image bytes, so storefront rendering no
     // longer depends on Telegram retaining a file_id or using the same bot token.

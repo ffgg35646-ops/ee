@@ -11,9 +11,11 @@ type FooterSettings = {
   vatNumberRemoved?: boolean;
   iconOneImageUrl?: string;
   iconOneLinkUrl?: string;
+  iconOneMediaId?: string;
   iconOneImageDataBase64?: string;
   iconTwoImageUrl?: string;
   iconTwoLinkUrl?: string;
+  iconTwoMediaId?: string;
   iconTwoImageDataBase64?: string;
   updatedAt?: Date;
 };
@@ -42,8 +44,8 @@ export async function GET() {
       ? ''
       : typeof footer?.vatNumber === 'string' ? footer.vatNumber : DEFAULT_VAT_NUMBER;
     const version = String(footer?.updatedAt instanceof Date ? footer.updatedAt.getTime() : 0);
-    const iconOneImageUrl = footer?.iconOneImageUrl || (footer?.iconOneImageDataBase64 ? '/api/store-footer-assets/icon/one/image?v=' + version : '');
-    const iconTwoImageUrl = footer?.iconTwoImageUrl || (footer?.iconTwoImageDataBase64 ? '/api/store-footer-assets/icon/two/image?v=' + version : '');
+    const iconOneImageUrl = footer?.iconOneImageUrl || (footer?.iconOneImageDataBase64 || footer?.iconOneMediaId ? '/api/store-footer-assets/icon/one/image?v=' + version : '');
+    const iconTwoImageUrl = footer?.iconTwoImageUrl || (footer?.iconTwoImageDataBase64 || footer?.iconTwoMediaId ? '/api/store-footer-assets/icon/two/image?v=' + version : '');
 
     const projectName = typeof brand?.projectName === 'string' && brand.projectName.trim()
       ? brand.projectName.trim()
