@@ -4,7 +4,7 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 import { getAdminFromRequest, ensureBootstrapAdmin, hashAdminPassword } from '@/lib/admin-auth';
 import { listCategories, sortStoreCategoriesBySourceOrder, type StoreCategory, type StoredProduct } from '@/lib/catalog';
-import { discoverAlBragProductUrls, importAlBragProduct } from '@/lib/source-product-importer';
+import { discoverAlBragCategoryProductUrls, discoverAlBragProductUrls, importAlBragProduct } from '@/lib/source-product-importer';
 import { isPhoneCaseProduct } from '@/lib/phone-case';
 import {
   getCatalogImportJob,
@@ -398,6 +398,21 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     return { message: 'تم إرسال الإشعار إلى العميل.' };
   }
 
+  if (action === 'discover-category-catalog') {
+    const categoryUrl = textValue(body.categoryUrl, 1200);
+    const sampleProductUrl = textValue(body.sampleProductUrl, 1200);
+    const existingJob = await getCatalogImportJob(db);
+    if (existingJob && ['ready', 'running'].includes(existingJob.status)) {
+      throw new Error('توجد عملية استيراد نشطة بالفعل. استكمل العملية الحالية أو أوقفها أولًا.');
+    }
+    const discovery = await discoverAlBragCategoryProductUrls(categoryUrl, sampleProductUrl);
+    const job = await startCatalogImportJob(db, discovery.urls, discovery, admin.email);
+    return {
+      message: discovery.urls.length ? 'تم اكتشاف منتجات القسم.' : 'لم يتم العثور على روابط منتجات في هذا القسم.',
+      discovery,
+      job
+    };
+  }
   if (action === 'discover-catalog') {
     const existingJob = await getCatalogImportJob(db);
     if (existingJob && ['ready', 'running'].includes(existingJob.status)) {
