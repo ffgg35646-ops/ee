@@ -364,6 +364,55 @@ function readProductPayload(body: Body) {
 async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id: string; email: string; role: string }, action: string, body: Body) {
   const now = new Date();
 
+  if (action === 'import-catalog-media-batch') {
+    const collection = db.collection<StoredProduct>('products');
+    const allProducts = await collection.find({ deleted: { $ne: true } })
+      .project({ _id: 1, name: 1, images: 1, colorImages: 1 })
+      .sort({ _id: 1 }).toArray();
+    const needsImport = allProducts.filter((product) => [
+      ...(Array.isArray(product.images) ? product.images : []),
+      ...Object.values(product.colorImages || {})
+    ].some((value) => {
+      if (typeof value !== 'string' || value.startsWith('admin-media:')) return false;
+      try {
+        const url = new URL(value);
+        return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
+      } catch {
+        return false;
+      }
+    }));
+    if (!needsImport.length) {
+      return { message: 'كل صور المنتجات محفوظة بالفعل في مكتبة الإدارة.', importedImages: 0, processedCount: 0, remainingCount: 0, errors: [] };
+    }
+
+    let importedImages = 0;
+    let processedCount = 0;
+    const errors: string[] = [];
+    for (const product of needsImport.slice(0, 3)) {
+      try {
+        const imported = await importProductImagesToAdminMedia(db, admin.email, product as StoredProduct);
+        if (imported.importedCount) {
+          await collection.updateOne(
+            { _id: product._id },
+            { $set: { images: imported.images, colorImages: imported.colorImages, updatedAt: now } }
+          );
+          importedImages += imported.importedCount;
+        }
+        processedCount += 1;
+      } catch (error) {
+        errors.push(String(product.name || product._id) + ': ' + (error instanceof Error ? error.message : 'تعذر تنزيل الصورة.'));
+      }
+    }
+    const remainingCount = Math.max(0, needsImport.length - processedCount + errors.length);
+    return {
+      message: 'تم حفظ ' + importedImages + ' صورة في هذه الدفعة.',
+      importedImages,
+      processedCount,
+      remainingCount,
+      errors
+    };
+  }
+
   if (action === 'import-product-media') {
     const id = textValue(body.id, 40);
     if (!ObjectId.isValid(id)) throw new Error('معرّف المنتج غير صالح.');
