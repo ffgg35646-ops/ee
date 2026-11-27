@@ -1,4 +1,4 @@
-const SOURCE_HOSTS = new Set(["www.al-brag-ksa.store", "al-brag-ksa.store"]);
+const SOURCE_HOSTS = new Set(["www.al-brag-ksa.com", "al-brag-ksa.com", "www.al-brag-ksa.store", "al-brag-ksa.store"]);
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGES = 10;
 
@@ -6,7 +6,7 @@ type JsonRecord = Record<string, any>;
 
 export type ImportedSourceProduct = {
   sourceProductUrl: string;
-  sourceStore: "al-brag-ksa.store";
+  sourceStore: "al-brag-ksa.com" | "al-brag-ksa.store";
   name: string;
   price: number;
   oldPrice?: number;
@@ -440,7 +440,7 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
 
   return {
     sourceProductUrl: finalUrl.toString(),
-    sourceStore: "al-brag-ksa.store",
+    sourceStore: finalUrl.hostname.toLowerCase().replace(/^www\./, "") as ImportedSourceProduct["sourceStore"],
     name: title.slice(0, 120),
     price,
     ...(oldPrice && oldPrice > price ? { oldPrice } : {}),
@@ -534,7 +534,7 @@ function collectProductLinks(document: string, pageUrl: URL): string[] {
     const url = normalizeSourceUrl(href, pageUrl);
     if (url) found.add(url);
   }
-  for (const match of document.matchAll(/https?:\/\/(?:www\.)?al-brag-ksa\.store\/product2\/\d+\/?/gi)) {
+  for (const match of document.matchAll(/https?:\/\/(?:www\.)?al-brag-ksa\.(?:com|store)\/product2\/\d+\/?/gi)) {
     const url = normalizeSourceUrl(match[0], pageUrl);
     if (url) found.add(url);
   }
@@ -546,7 +546,7 @@ function collectProductLinks(document: string, pageUrl: URL): string[] {
 }
 
 export async function discoverAlBragProductUrls(): Promise<SourceDiscoveryResult> {
-  const origin = "https://www.al-brag-ksa.store";
+  const origin = "https://www.al-brag-ksa.com";
   const warnings: string[] = [];
   const sitemapQueue = new Set<string>([
     origin + "/sitemap.xml",
@@ -691,7 +691,7 @@ export async function discoverAlBragCategoryProductUrls(
     || categoryUrl.username
     || categoryUrl.password
   ) {
-    throw new Error("رابط القسم يجب أن يكون من al-brag-ksa.store وبمسار /catalog.");
+    throw new Error("رابط القسم يجب أن يكون من al-brag-ksa.com أو al-brag-ksa.store وبمسار /catalog.");
   }
 
   const categorySlug = (categoryUrl.searchParams.get("category") || "").trim();
