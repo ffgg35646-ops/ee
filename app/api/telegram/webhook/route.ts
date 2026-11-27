@@ -1041,7 +1041,7 @@ async function saveProduct(db: Db, session: AdminSession, chatId: number) {
     ...(Object.keys(data.storagePrices || {}).length ? { storagePrices: data.storagePrices } : {}),
     price: data.price,
     details: data.details,
-    images: (data.images || []).slice(0, 10),
+    images: storedImages,
     createdAt: now,
     updatedAt: now
   });
@@ -2023,6 +2023,33 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
         updatedAt: now,
         deleted: false
       } as StoreCategory;
+    }
+
+    const storedImages: string[] = [];
+    for (const imageUrl of (data.images || []).slice(0, 10)) {
+      try {
+        // Copy public source images into the bot's Telegram media storage so
+        // imported products do not depend on the source host remaining online.
+        const uploaded = await telegramApi<{ message_id: number; photo?: TelegramPhoto[] }>('sendPhoto', {
+          chat_id: chatId,
+          photo: imageUrl
+        });
+        const bestPhoto = uploaded.photo?.[uploaded.photo.length - 1];
+        if (bestPhoto?.file_id) {
+          storedImages.push(bestPhoto.file_id);
+          await telegramApi('deleteMessage', {
+            chat_id: chatId,
+            message_id: uploaded.message_id
+          }).catch((error) => {
+            console.error('Imported image cleanup failed:', error instanceof Error ? error.message : 'Unknown error');
+          });
+          continue;
+        }
+      } catch (error) {
+        console.warn('Could not copy imported image to Telegram; retaining source URL:', error instanceof Error ? error.message : 'Unknown error');
+      }
+      // Keep a working proxy URL as a fallback for images Telegram cannot copy.
+      storedImages.push(imageUrl);
     }
 
     const productId = new ObjectId();
