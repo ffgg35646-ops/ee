@@ -13,6 +13,7 @@ import {
 } from '@/lib/telegram';
 import { formatOrderForAdmin, getRecentOrders, makeOrderNumber, type StoreOrder } from '@/lib/orders';
 import { isPhoneCaseProduct } from '@/lib/phone-case';
+import { importAlBragProduct } from '@/lib/source-product-importer';
 import siteLogo from '@/wrwerwe.jpg';
 
 export const runtime = 'nodejs';
@@ -69,6 +70,15 @@ type FlowData = {
   searchQuery?: string;
   searchMessageId?: number;
   logoBackgroundMode?: 'with' | 'without';
+  sourceProductUrl?: string;
+  sourceStore?: string;
+  sourceCategory?: string;
+  sourceBrand?: string;
+  sourceSku?: string;
+  sourceBarcode?: string;
+  shortDescription?: string;
+  specifications?: string[];
+  oldPrice?: number;
 };
 
 type FlowStep =
@@ -78,12 +88,12 @@ type FlowStep =
   | 'edit_product_storage_add' | 'edit_product_storage_select_edit' | 'edit_product_storage_edit_value' | 'edit_product_storage_select_delete'
   | 'contact_whatsapp' | 'cancel_reason' | 'slider_image' | 'footer_edit_text' | 'footer_confirm_save'
   | 'footer_vat_number' | 'brand_project_name' | 'footer_icon_image' | 'footer_icon_link'
-  | 'store_logo_image' | 'search_products';
+  | 'store_logo_image' | 'search_products' | 'import_product_url' | 'import_product_preview';
 
 type AdminSession = {
   telegramUserId: number;
   chatId: number;
-  workflow: 'add_section' | 'rename_section' | 'move_section' | 'add_product' | 'edit_product' | 'edit_product_search' | 'contact' | 'cancel_order' | 'slider' | 'footer_content' | 'footer_settings' | 'store_logo';
+  workflow: 'add_section' | 'rename_section' | 'move_section' | 'add_product' | 'edit_product' | 'edit_product_search' | 'import_product' | 'contact' | 'cancel_order' | 'slider' | 'footer_content' | 'footer_settings' | 'store_logo';
   step: FlowStep;
   data: FlowData;
   updatedAt: Date;
@@ -94,6 +104,7 @@ const MENU_ADD_SECTION = 'إضافة قسم';
 const MENU_EDIT_SECTION = 'تعديل قسم';
 const MENU_ADD_PRODUCT = 'إضافة منتج';
 const MENU_EDIT_PRODUCT = 'تعديل المنتج';
+const MENU_IMPORT_PRODUCT = 'استيراد منتج من رابط';
 const MENU_CONTACT = 'الاتصال';
 const MENU_SLIDER = 'السلايدر';
 const MENU_POLICIES = 'السياسات';
@@ -1954,6 +1965,105 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
     await showCategoryProductsForEdit(db, chatId, id, '', callback.message?.message_id);
     return;
   }
+  if (action === 'import-product-cancel') {
+    await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+    await sendMainMenu(db, chatId, 'تم إلغاء استيراد المنتج، ولم يتم حفظ أي بيانات.');
+    return;
+  }
+  if (action === 'import-product-confirm') {
+    const session = await db.collection<AdminSession>('telegram_sessions').findOne({
+      telegramUserId: callback.from.id,
+      workflow: 'import_product',
+      step: 'import_product_preview'
+    });
+    if (!session) {
+      await sendTelegramMessage(chatId, 'انتهت معاينة الاستيراد. ابدأ العملية من القائمة مرة أخرى.');
+      return;
+    }
+
+    const data = session.data;
+    if (!data.sourceProductUrl || !data.name || !Number.isFinite(data.price) || !data.price || !data.details) {
+      await sendTelegramMessage(chatId, 'بيانات المنتج المستورد غير مكتملة. لم يتم حفظ المنتج.');
+      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+      return;
+    }
+
+    const existing = await db.collection<StoredProduct>('products').findOne({
+      sourceProductUrl: data.sourceProductUrl,
+      deleted: { $ne: true }
+    });
+    if (existing) {
+      await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+      await sendMainMenu(db, chatId, 'هذا الرابط مستورد بالفعل ضمن المنتج «' + existing.name + '». لم يتم إنشاء نسخة مكررة.');
+      return;
+    }
+
+    const now = new Date();
+    const categoryName = (data.sourceCategory || 'منتجات مستوردة').trim().slice(0, 120) || 'منتجات مستوردة';
+    let section = await db.collection<StoreCategory>('categories').findOne({
+      name: categoryName,
+      deleted: { $ne: true }
+    });
+    if (!section) {
+      const categoryId = new ObjectId();
+      const description = 'قسم أُنشئ تلقائيًا عند استيراد منتج من ' + (data.sourceStore || 'مصدر خارجي');
+      await db.collection<StoreCategory>('categories').insertOne({
+        _id: categoryId,
+        name: categoryName,
+        description,
+        createdAt: now,
+        updatedAt: now,
+        deleted: false
+      });
+      section = {
+        _id: categoryId,
+        name: categoryName,
+        description,
+        createdAt: now,
+        updatedAt: now,
+        deleted: false
+      } as StoreCategory;
+    }
+
+    const productId = new ObjectId();
+    await db.collection<StoredProduct>('products').insertOne({
+      _id: productId,
+      categoryId: section._id.toHexString(),
+      category: section.name,
+      name: data.name.slice(0, 120),
+      price: data.price,
+      ...(data.oldPrice && data.oldPrice > data.price ? { oldPrice: data.oldPrice } : {}),
+      shortDescription: (data.shortDescription || data.details).slice(0, 300),
+      details: data.details.slice(0, 3000),
+      specifications: (data.specifications || []).slice(0, 40),
+      colors: (data.colors || []).slice(0, 30),
+      storageOptions: (data.storageOptions || []).slice(0, 30),
+      ...(data.storagePrices && Object.keys(data.storagePrices).length ? { storagePrices: data.storagePrices } : {}),
+      images: (data.images || []).slice(0, 10),
+      sourceStore: data.sourceStore || 'al-brag-ksa.store',
+      sourceProductUrl: data.sourceProductUrl,
+      sourceBrand: data.sourceBrand,
+      sourceSku: data.sourceSku,
+      sourceBarcode: data.sourceBarcode,
+      sourceImportedAt: now,
+      createdByTelegramId: callback.from.id,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    await db.collection('telegram_sessions').deleteOne({ telegramUserId: callback.from.id });
+    await sendMainMenu(
+      db,
+      chatId,
+      '✅ تم استيراد المنتج وحفظ نسخة منه في قاعدة بيانات المتجر.\n\n'
+      + 'المنتج: ' + data.name + '\n'
+      + 'القسم: ' + section.name + '\n'
+      + 'السعر: ' + data.price.toLocaleString('en-US') + ' ر.س\n'
+      + 'الصور: ' + (data.images || []).length + '\n'
+      + 'يمكنك الآن فتح «تعديل المنتج» للتحكم في بياناته وصوره وخياراته.'
+    );
+    return;
+  }
   if (action === 'product-section') {
     if (!isObjectId(id || '')) return void await sendTelegramMessage(chatId, 'القسم المحدد غير صالح.');
     const section = await db.collection<StoreCategory>('categories').findOne({ _id: new ObjectId(id), deleted: { $ne: true } });
@@ -2395,6 +2505,77 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
 async function handleFlowMessage(db: Db, session: AdminSession, message: TelegramMessage) {
   const chatId = message.chat.id;
   const value = message.text?.trim() || '';
+
+  if (session.workflow === 'import_product' && session.step === 'import_product_url') {
+    if (!value) {
+      await sendTelegramMessage(chatId, 'أرسل رابط المنتج من al-brag-ksa.store.');
+      return;
+    }
+
+    try {
+      const imported = await importAlBragProduct(value);
+      const existing = await db.collection<StoredProduct>('products').findOne({
+        sourceProductUrl: imported.sourceProductUrl,
+        deleted: { $ne: true }
+      });
+      if (existing) {
+        await db.collection('telegram_sessions').deleteOne({ telegramUserId: session.telegramUserId });
+        await sendMainMenu(db, chatId, 'هذا المنتج موجود بالفعل في المتجر باسم «' + existing.name + '». لم يتم إنشاء نسخة مكررة.');
+        return;
+      }
+
+      session.data = {
+        ...session.data,
+        name: imported.name,
+        price: imported.price,
+        oldPrice: imported.oldPrice,
+        shortDescription: imported.shortDescription,
+        details: imported.details,
+        specifications: imported.specifications,
+        images: imported.images,
+        colors: imported.colors,
+        storageOptions: imported.storageOptions,
+        storagePrices: imported.storagePrices,
+        sourceProductUrl: imported.sourceProductUrl,
+        sourceStore: imported.sourceStore,
+        sourceCategory: imported.sourceCategory,
+        sourceBrand: imported.sourceBrand,
+        sourceSku: imported.sourceSku,
+        sourceBarcode: imported.sourceBarcode
+      };
+      session.step = 'import_product_preview';
+      await saveSession(db, session);
+
+      const preview = [
+        '🔎 معاينة المنتج قبل الاستيراد',
+        '',
+        'الاسم: ' + imported.name,
+        'السعر: ' + imported.price.toLocaleString('en-US') + ' ر.س',
+        'القسم من المصدر: ' + imported.sourceCategory,
+        'الماركة: ' + (imported.sourceBrand || 'غير محددة'),
+        'الألوان: ' + (imported.colors.join('، ') || 'غير مستخرجة'),
+        'السعات: ' + (imported.storageOptions.join('، ') || 'غير مستخرجة'),
+        'الصور: ' + imported.images.length,
+        '',
+        'الوصف: ' + imported.shortDescription.slice(0, 450),
+        '',
+        'اختر تأكيد الاستيراد لحفظ نسخة في قاعدة بياناتنا. لن يتم تعديل المنتج في الموقع الأصلي.'
+      ].join('\n');
+
+      await sendTelegramMessage(chatId, preview, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ تأكيد الاستيراد', callback_data: 'import-product-confirm' }],
+            [{ text: 'إلغاء', callback_data: 'import-product-cancel' }]
+          ]
+        }
+      });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'تعذر قراءة صفحة المنتج.';
+      await sendTelegramMessage(chatId, '❌ تعذر استيراد المنتج.\n' + messageText + '\n\nراجع الرابط وأرسله مرة أخرى، أو اكتب /cancel للإلغاء.');
+    }
+    return;
+  }
 
   if (session.workflow === 'store_logo' && session.step === 'store_logo_image') {
     const photo = message.photo?.[message.photo.length - 1];
@@ -3109,6 +3290,18 @@ async function handleUpdate(db: Db, update: TelegramUpdate) {
   if (value === MENU_EDIT_PRODUCT) {
     await db.collection('telegram_sessions').deleteOne({ telegramUserId: from.id });
     await listProductSectionsForEdit(db, chatId);
+    return;
+  }
+  if (value === MENU_IMPORT_PRODUCT) {
+    await startFlow(
+      db,
+      from.id,
+      chatId,
+      'import_product',
+      'import_product_url',
+      {},
+      'أرسل رابط المنتج من موقع البرق المضيء، مثال:\nhttps://www.al-brag-ksa.store/product2/1901\n\nسيعرض البوت معاينة قبل الحفظ. اكتب /cancel للإلغاء.'
+    );
     return;
   }
   if (value === MENU_SLIDER) {
