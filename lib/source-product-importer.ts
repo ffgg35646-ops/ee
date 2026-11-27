@@ -1,4 +1,4 @@
-const SOURCE_HOSTS = new Set(["www.al-brag-ksa.store", "al-brag-ksa.store"]);
+const SOURCE_HOSTS = new Set(["www.al-brag-ksa.store", "al-brag-ksa.store", "www.al-brag-ksa.com", "al-brag-ksa.com"]);
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGES = 10;
 
@@ -6,7 +6,7 @@ type JsonRecord = Record<string, any>;
 
 export type ImportedSourceProduct = {
   sourceProductUrl: string;
-  sourceStore: "al-brag-ksa.store";
+  sourceStore: "al-brag-ksa.store" | "al-brag-ksa.com";
   name: string;
   price: number;
   oldPrice?: number;
@@ -252,7 +252,7 @@ async function fetchProductHtml(initialUrl: URL): Promise<{ html: string; finalU
       headers: {
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "accept-language": "ar-SA,ar;q=0.9,en;q=0.7",
-        "user-agent": "Mozilla/5.0 (compatible; EEProductImporter/1.0; +https://www.al-brag-ksa.store)"
+        "user-agent": "Mozilla/5.0 (compatible; EEProductImporter/1.0; +https://al-brag-ksa.com)"
       },
       signal: AbortSignal.timeout(18_000)
     });
@@ -290,7 +290,7 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
   try {
     url = new URL(rawUrl.trim());
   } catch {
-    throw new Error("أرسل رابط منتج صحيحًا يبدأ بـ https://www.al-brag-ksa.store/");
+    throw new Error("أرسل رابط منتج صحيحًا من al-brag-ksa.com أو al-brag-ksa.store.");
   }
 
   if (
@@ -300,7 +300,7 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
     || url.username
     || url.password
   ) {
-    throw new Error("الاستيراد متاح حاليًا لروابط المنتجات من al-brag-ksa.store فقط، بصيغة /product2/رقم.");
+    throw new Error("الاستيراد متاح لروابط منتجات البرق من ‎al-brag-ksa.com أو ‎al-brag-ksa.store بصيغة /product2/رقم.");
   }
 
   url.hash = "";
@@ -440,7 +440,7 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
 
   return {
     sourceProductUrl: finalUrl.toString(),
-    sourceStore: "al-brag-ksa.store",
+    sourceStore: finalUrl.hostname.toLowerCase().endsWith(".com") ? "al-brag-ksa.com" : "al-brag-ksa.store",
     name: title.slice(0, 120),
     price,
     ...(oldPrice && oldPrice > price ? { oldPrice } : {}),
