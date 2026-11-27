@@ -640,6 +640,7 @@ async function showProductEditMenu(db: Db, chatId: number, id: string) {
     'لون مع صور: ' + ((product.colors || []).map((color) => color + ((product.colorImages || {})[color] ? ' ✓' : '')).join('، ') || 'غير محدد'),
     'مساحات التخزين: ' + ((product.storageOptions || []).map((storage) => storage + (product.storagePrices?.[storage] ? ' — ' + product.storagePrices[storage].toLocaleString('en-US') + ' ر.س' : '')).join('، ') || 'غير محدد'),
     'السعر: ' + product.price.toLocaleString('en-US') + ' ر.س',
+    'السعر السابق: ' + (product.oldPrice ? product.oldPrice.toLocaleString('en-US') + ' ر.س' : 'غير موجود'),
     'عدد المواصفات: ' + (product.specifications || []).length,
     ...(product.sourceProductUrl ? ['المصدر: ' + product.sourceProductUrl] : []),
     ...(product.sourceBrand ? ['الماركة المستخرجة: ' + product.sourceBrand] : []),
