@@ -42,6 +42,12 @@ export type StoredProduct = Document & {
   images: string[];
   sourceStore?: string;
   sourceProductUrl?: string;
+  sourceImageUrls?: string[];
+  sourceBrand?: string;
+  sourceSku?: string;
+  sourceBarcode?: string;
+  sourceImportedAt?: Date;
+  createdByTelegramId?: number;
   colorMask?: ProductColorMask;
   createdAt: Date;
   updatedAt: Date;
