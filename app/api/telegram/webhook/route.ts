@@ -2106,6 +2106,9 @@ async function handleCallback(db: Db, callback: TelegramCallback) {
         });
         return { state: 'imported' as const, name: imported.name, error: '' };
       } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 11000) {
+          return { state: 'skipped' as const, name: imported.name, error: '' };
+        }
         return { state: 'failed' as const, name: imported.name, error: error instanceof Error ? error.message : 'تعذر حفظ المنتج.' };
       }
     }));
