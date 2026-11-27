@@ -260,6 +260,45 @@ const IMPORTABLE_IMAGE_HOSTS = new Set([
   'cdsassets.apple.com','images.apple.com','www.apple.com'
 ]);
 
+async function refreshStoredProductImagesFromSource(
+  db: Awaited<ReturnType<typeof getDb>>,
+  product: StoredProduct
+): Promise<StoredProduct> {
+  const rawUrl = typeof product.sourceProductUrl === 'string' ? product.sourceProductUrl : '';
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(rawUrl);
+  } catch {
+    return product;
+  }
+  if (
+    sourceUrl.protocol !== 'https:'
+    || !['al-brag-ksa.com','www.al-brag-ksa.com','al-brag-ksa.store','www.al-brag-ksa.store'].includes(sourceUrl.hostname.toLowerCase())
+    || !/^\/product2\/\d+\/?$/.test(sourceUrl.pathname)
+  ) {
+    return product;
+  }
+
+  const sourceProduct = await importAlBragProduct(sourceUrl.toString());
+  const sourceImages = [...new Set(sourceProduct.images.filter((value) => typeof value === 'string' && value.startsWith('https://')))].slice(0, 10);
+  if (!sourceImages.length) throw new Error('صفحة المنتج الأصلية لم تُرجع صورة قابلة للحفظ: ' + sourceUrl.pathname);
+
+  const colorImages = { ...(product.colorImages || {}) };
+  for (const color of product.colors || []) colorImages[color] = sourceImages[0];
+  const refreshed: StoredProduct = {
+    ...product,
+    images: sourceImages,
+    sourceImageUrls: sourceImages,
+    colorImages,
+    updatedAt: new Date()
+  };
+  await db.collection<StoredProduct>('products').updateOne(
+    { _id: product._id },
+    { $set: { images: refreshed.images, sourceImageUrls: refreshed.sourceImageUrls, colorImages: refreshed.colorImages, updatedAt: refreshed.updatedAt } }
+  );
+  return refreshed;
+}
+
 async function importProductImagesToAdminMedia(
   db: Awaited<ReturnType<typeof getDb>>,
   adminEmail: string,
@@ -367,7 +406,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
   if (action === 'import-catalog-media-batch') {
     const collection = db.collection<StoredProduct>('products');
     const allProducts = await collection.find({ deleted: { $ne: true } })
-      .project({ _id: 1, name: 1, images: 1, colorImages: 1 })
+      .project({ _id: 1, name: 1, images: 1, colorImages: 1, sourceProductUrl: 1, colors: 1 })
       .sort({ _id: 1 }).toArray();
     const needsImport = allProducts.filter((product) => [
       ...(Array.isArray(product.images) ? product.images : []),
@@ -388,9 +427,22 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     let importedImages = 0;
     let processedCount = 0;
     const errors: string[] = [];
-    for (const product of needsImport.slice(0, 3)) {
+    const productPage = needsImport.find((product) => {
       try {
-        const imported = await importProductImagesToAdminMedia(db, admin.email, product as StoredProduct);
+        const url = new URL(String(product.sourceProductUrl || ''));
+        return /^\/product2\/\d+\/?$/.test(url.pathname)
+          && ['al-brag-ksa.com','www.al-brag-ksa.com','al-brag-ksa.store','www.al-brag-ksa.store'].includes(url.hostname.toLowerCase());
+      } catch {
+        return false;
+      }
+    });
+    // Refresh one exact source product page at a time; other URL-only products
+    // can be migrated in small groups without a second source-page request.
+    const batch = productPage ? [productPage] : needsImport.slice(0, 3);
+    for (const product of batch) {
+      try {
+        const refreshed = await refreshStoredProductImagesFromSource(db, product as StoredProduct);
+        const imported = await importProductImagesToAdminMedia(db, admin.email, refreshed);
         if (imported.importedCount) {
           await collection.updateOne(
             { _id: product._id },
@@ -419,7 +471,8 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     const collection = db.collection<StoredProduct>('products');
     const product = await collection.findOne({ _id: new ObjectId(id), deleted: { $ne: true } });
     if (!product) throw new Error('المنتج غير موجود أو تم حذفه.');
-    const imported = await importProductImagesToAdminMedia(db, admin.email, product);
+    const refreshedProduct = await refreshStoredProductImagesFromSource(db, product);
+    const imported = await importProductImagesToAdminMedia(db, admin.email, refreshedProduct);
     if (imported.importedCount) {
       await collection.updateOne(
         { _id: product._id },
