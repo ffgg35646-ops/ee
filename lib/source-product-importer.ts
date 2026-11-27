@@ -308,7 +308,7 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
   const { html, finalUrl } = await fetchProductHtml(url);
   finalUrl.hash = "";
   finalUrl.search = "";
-  finalUrl.pathname = finalUrl.pathname.replace(/\\/+$/, "");
+  finalUrl.pathname = finalUrl.pathname.replace(/\/+$/, "");
   const jsonLdNodes: JsonRecord[] = [];
   for (const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
