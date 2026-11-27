@@ -293,7 +293,9 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
   async function submitProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const colorImageInputs = Array.from(formElement.querySelectorAll<HTMLInputElement>('input[data-color-image]'));
     const categoryId = String(form.get('categoryId') || '');
     const storageOptions = parseLines(String(form.get('storageOptions') || ''));
     const storagePrices = parseStoragePrices(String(form.get('storagePrices') || ''));
@@ -305,6 +307,14 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
       if (selectedImages.length) {
         const uploaded = await uploadAdminMedia(selectedImages);
         images = [...images, ...uploaded.map((item) => item.ref)];
+      }
+      const colorImages = parsePairLines(String(form.get('colorImages') || ''));
+      for (const input of colorImageInputs) {
+        const color = input.dataset.colorImage || '';
+        const file = input.files?.[0];
+        if (!color || !file || file.size <= 0) continue;
+        const uploaded = await uploadAdminMedia([file]);
+        if (uploaded[0]?.ref) colorImages[color] = uploaded[0].ref;
       }
       if (images.length > 10) {
         setError('الحد الأقصى 10 صور للمنتج. احذف بعض الروابط قبل إضافة صور أخرى.');
@@ -323,12 +333,35 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
         storageOptions,
         storagePrices,
         specifications: parseLines(String(form.get('specifications') || '')),
-        colorImages: parsePairLines(String(form.get('colorImages') || '')),
+        colorImages,
         images
       };
       await runAction(payload, 'products');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'تعذر رفع الصور أو حفظ المنتج.');
+    }
+  }
+
+  async function importProductImagesToLibrary() {
+    const current = productEditor;
+    if (!current) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await apiPost<{ message?: string }>({
+        action: 'import-product-media',
+        id: current.id
+      });
+      const data = await apiGet<{ products: ProductRow[] }>('products', { q: current.name });
+      setProducts(data.products || []);
+      const refreshed = (data.products || []).find((item) => item.id === current.id);
+      if (refreshed) setProductEditor(refreshed);
+      setNotice(result.message || 'تم حفظ صور المنتج داخل مكتبة الإدارة.');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'تعذر حفظ الصور داخل مكتبة الإدارة.');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -648,9 +681,41 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
                       <Field label="مساحات التخزين (كل مساحة في سطر)"><Textarea name="storageOptions" rows={3} defaultValue={lines(productEditor?.storageOptions)}/></Field>
                       <Field label="سعر كل مساحة: 512GB=999"><Textarea name="storagePrices" rows={3} defaultValue={Object.entries(productEditor?.storagePrices || {}).map(([key, value]) => key + '=' + value).join('\n')}/></Field>
                       <Field label="المواصفات (كل مواصفة في سطر)"><Textarea name="specifications" rows={4} defaultValue={lines(productEditor?.specifications)}/></Field>
-                      <Field label="روابط الصور أو معرّفات صور البوت (كل رابط في سطر)" wide><Textarea name="images" rows={4} defaultValue={lines(productEditor?.images)}/></Field>
-                      <Field label="رفع صور من جهازك (حتى 10 صور، 4 ميجابايت إجمالي الرفع)" wide><Input name="imageFiles" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple/></Field>
-                      <Field label="صور الألوان: اللون=رابط الصورة" wide><Textarea name="colorImages" rows={3} defaultValue={Object.entries(productEditor?.colorImages || {}).map(([color, image]) => color + '=' + image).join('\n')}/></Field>
+                      <Field label="روابط الصور أو معرّفات صور البوت (كل رابط في سطر)" wide>
+                        <div>
+                          <Textarea name="images" rows={4} defaultValue={lines(productEditor?.images)}/>
+                          <small>لحذف صورة احذف سطرها من هنا ثم احفظ. إذا كانت الصورة محفوظة في مكتبة الإدارة فسيُحذف ملفها تلقائيًا عندما لا يعود مستخدمًا.</small>
+                        </div>
+                      </Field>
+                      <Field label="رفع صور عامة من جهازك (حتى 10 صور، 4 ميجابايت إجمالي الرفع)" wide><Input name="imageFiles" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple/></Field>
+                      <Field label="صور الألوان: اللون=رابط الصورة" wide>
+                        <div>
+                          <Textarea name="colorImages" rows={3} defaultValue={Object.entries(productEditor?.colorImages || {}).map(([color, image]) => color + '=' + image).join('\n')}/>
+                          <small>احذف سطر اللون لإزالة صورته. يمكنك أيضًا رفع صورة مستقلة لكل لون بالأسفل.</small>
+                        </div>
+                      </Field>
+                      {productEditor?.colors?.length ? (
+                        <div className={cn(styles.wide, styles['admin-editor-grid'])}>
+                          <div className={styles.wide}><strong>رفع صورة مستقلة لكل لون</strong><p className={styles['admin-muted']}>الصورة التي ترفعها للون ستظهر مع نسخة المنتج بهذا اللون بدل الصورة العامة.</p></div>
+                          {productEditor.colors.map((color, index) => (
+                            <div key={color} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', gap: 10, padding: 10, border: '1px solid var(--admin-border, #e5e7eb)', borderRadius: 10 }}>
+                              <label htmlFor={'color-image-' + index} style={{ display: 'grid', gap: 6, minWidth: 0 }}>
+                                <strong>{color}</strong>
+                                <Input id={'color-image-' + index} name="colorImageFiles" type="file" data-color-image={color} accept="image/jpeg,image/png,image/webp,image/gif,image/avif"/>
+                              </label>
+                              {productEditor.colorImages?.[color] ? (
+                                <img src={'/api/products/' + productEditor.id + '/image?color=' + encodeURIComponent(color)} alt={'صورة ' + color} style={{ width: 64, height: 64, objectFit: 'contain', borderRadius: 8, background: '#fff' }}/>
+                              ) : <span className={styles['admin-muted']}>لا توجد صورة خاصة</span>}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {productEditor ? (
+                        <div className={cn(styles.wide, styles['admin-actions'])}>
+                          <Button type="button" kind="secondary" onClick={() => void importProductImagesToLibrary()} disabled={busy}>حفظ الصور الحالية داخل مكتبة الصور</Button>
+                          <span className={styles['admin-muted']}>ينسخ روابط الصور الحالية إلى admin_media ويستبدلها بملفات محفوظة في قاعدة البيانات.</span>
+                        </div>
+                      ) : null}
                       <Field label="الوصف والتفاصيل" wide><Textarea name="details" rows={6} required minLength={2} maxLength={3000} defaultValue={productEditor?.details || ''}/></Field>
                       <div className={cn(styles['admin-actions'], styles.wide)}>
                         <Button type="submit" disabled={busy}>{busy ? 'جارٍ الحفظ...' : 'حفظ المنتج'}</Button>
