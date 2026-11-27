@@ -72,7 +72,7 @@ export async function sendTelegramMessage(
   } else if (Array.isArray(suppliedMarkup.keyboard)) {
     const rows = suppliedMarkup.keyboard;
     const hasMenuShortcut = rows.some((row) => row.some((button) => button.text === 'رجوع إلى القائمة الرئيسية'));
-    const hasMainMenuItems = rows.some((row) => row.some((button) => ['جديد', 'تم الشحن', 'طلبات العملاء', 'إضافة طلب', 'تعديل الطلب', 'إضافة قسم', 'تعديل قسم', 'إضافة منتج', 'تعديل المنتج', 'تعديلات أخرى'].includes(button.text.replace(/^🔔\s*/, '').replace(/\s*\(\d+\+?\)$/, ''))));
+    const hasMainMenuItems = rows.some((row) => row.some((button) => ['جديد', 'تم الشحن', 'طلبات العملاء', 'إضافة طلب', 'تعديل الطلب', 'إضافة قسم', 'تعديل قسم', 'إضافة منتج', 'تعديل المنتج', 'استيراد منتج من رابط', 'تعديلات أخرى'].includes(button.text.replace(/^🔔\s*/, '').replace(/\s*\(\d+\+?\)$/, ''))));
     if (!hasMenuShortcut && !hasMainMenuItems) {
       replyMarkup = {
         ...suppliedMarkup,
@@ -103,6 +103,7 @@ export function adminReplyKeyboard(openOrdersCount = 0) {
       [{ text: ordersLabel }],
       [{ text: 'إضافة قسم' }, { text: 'تعديل قسم' }],
       [{ text: 'إضافة منتج' }, { text: 'تعديل المنتج' }],
+      [{ text: 'استيراد منتج من رابط' }],
       [{ text: 'تعديلات أخرى' }]
     ],
     resize_keyboard: true,
