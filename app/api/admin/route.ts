@@ -242,7 +242,7 @@ async function removeUnusedAdminMedia(db: Awaited<ReturnType<typeof getDb>>, ref
 }
 
 const IMPORTABLE_IMAGE_HOSTS = new Set([
-  'al-brag-ksa.com','i5.walmartimages.com','cdn.mafrservices.com','www.belkin.com',
+  'al-brag-ksa.com','www.al-brag-ksa.com','i5.walmartimages.com','cdn.mafrservices.com','www.belkin.com',
   'res.plaisio.gr','multimedia.bbycastatic.ca','shepetivka.com.ua','images.samsung.com',
   'media.tatacroma.com','cdn.beebom.com','cdn.idealo.com','image.vandenborre.be',
   'media.ldlc.com','smartmania.cz','gadgets-msk.ru','www.juzaphoto.com',
