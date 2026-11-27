@@ -109,7 +109,7 @@ async function readView(db: Awaited<ReturnType<typeof getDb>>, view: string, req
     }
     const products = await db.collection<StoredProduct>('products').find(filter)
       .project({ colorMask: 0 }).sort({ updatedAt: -1 }).limit(150).toArray();
-    return { products: products.map(serializeDocument) };
+    return { products: products.map((product) => serializeDocument(product as StoredProduct)) };
   }
 
   if (view === 'categories') {
@@ -141,9 +141,9 @@ async function readView(db: Awaited<ReturnType<typeof getDb>>, view: string, req
 
   if (view === 'store') {
     const [settings, pages, banners] = await Promise.all([
-      db.collection('store_settings').find({ _id: { $in: ['brand', 'contact', 'footer', 'branding'] } })
+      db.collection<{ _id: string; [key: string]: any }>('store_settings').find({ _id: { $in: ['brand', 'contact', 'footer', 'branding'] } })
         .project({ iconOneImageDataBase64: 0, iconTwoImageDataBase64: 0, iconOneImageSize: 0, iconTwoImageSize: 0 }).toArray(),
-      db.collection('store_pages').find({}).sort({ _id: 1 }).toArray(),
+      db.collection<{ _id: string; [key: string]: any }>('store_pages').find({}).sort({ _id: 1 }).toArray(),
       db.collection('store_banners').find({}).sort({ createdAt: 1, _id: 1 }).limit(12).toArray()
     ]);
     const settingsByKey = Object.fromEntries(settings.map((item) => [String(item._id), item]));
@@ -424,7 +424,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     if (!product.images?.[0]) throw new Error('أضف صورة الغلاف أولًا.');
     if (!product.colors?.length) throw new Error('أضف ألوان المنتج أولًا.');
     const token = randomBytes(32).toString('hex');
-    await db.collection('case_mask_editor_sessions').insertOne({
+    await db.collection<{ _id: string; [key: string]: any }>('case_mask_editor_sessions').insertOne({
       _id: createHash('sha256').update(token).digest('hex'),
       productId: id,
       telegramUserId: 0,
@@ -450,12 +450,12 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
   if (action === 'save-store-settings') {
     const projectName = textValue(body.projectName, 60);
     if (projectName) {
-      await db.collection('store_settings').updateOne({ _id: 'brand' }, { $set: { projectName, updatedAt: now, updatedByAdminEmail: admin.email } }, { upsert: true });
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne({ _id: 'brand' }, { $set: { projectName, updatedAt: now, updatedByAdminEmail: admin.email } }, { upsert: true });
     }
     if (body.whatsappNumber !== undefined) {
       const phone = textValue(body.whatsappNumber, 20).replace(/[^0-9]/g, '');
       if (phone && (phone.length < 8 || phone.length > 15)) throw new Error('رقم واتساب غير صالح.');
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'contact' },
         { $set: { whatsappNumber: phone, whatsappNumberRemoved: !phone, updatedAt: now, updatedByAdminEmail: admin.email } },
         { upsert: true }
@@ -464,14 +464,14 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     if (body.vatNumber !== undefined) {
       const vat = textValue(body.vatNumber, 30).replace(/[\s-]/g, '');
       if (vat && !/^\d{5,30}$/.test(vat)) throw new Error('الرقم الضريبي يجب أن يحتوي على 5 إلى 30 رقمًا.');
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'footer' },
         { $set: { vatNumber: vat, vatNumberRemoved: !vat, updatedAt: now, updatedByAdminEmail: admin.email } },
         { upsert: true }
       );
     }
     if (body.removeLogo === true) {
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'branding' },
         { $set: { logoBackgroundMode: body.logoBackgroundMode === 'without' ? 'without' : 'with', updatedAt: now, updatedByAdminEmail: admin.email }, $unset: { logoFileId: '', logoMediaId: '', logoImageUrl: '' } },
         { upsert: true }
@@ -481,7 +481,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
       if (!ObjectId.isValid(logoMediaId) || !(await db.collection('admin_media').findOne({ _id: new ObjectId(logoMediaId) }, { projection: { _id: 1 } }))) {
         throw new Error('ملف صورة الشعار غير موجود.');
       }
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'branding' },
         { $set: { logoMediaId, logoBackgroundMode: body.logoBackgroundMode === 'without' ? 'without' : 'with', updatedAt: now, updatedByAdminEmail: admin.email }, $unset: { logoFileId: '', logoImageUrl: '' } },
         { upsert: true }
@@ -492,13 +492,13 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
         const url = new URL(logoImageUrl);
         if (url.protocol !== 'https:' || url.username || url.password) throw new Error('رابط الشعار يجب أن يبدأ بـ https://.');
       }
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'branding' },
         { $set: { logoImageUrl, logoBackgroundMode: body.logoBackgroundMode === 'without' ? 'without' : 'with', updatedAt: now, updatedByAdminEmail: admin.email }, $unset: { logoFileId: '', logoMediaId: '' } },
         { upsert: true }
       );
     } else if (body.logoBackgroundMode !== undefined) {
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'branding' },
         { $set: { logoBackgroundMode: body.logoBackgroundMode === 'without' ? 'without' : 'with', updatedAt: now, updatedByAdminEmail: admin.email } },
         { upsert: true }
@@ -538,7 +538,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
       }
     }
     if (Object.keys(footerIconUpdates).length || Object.keys(footerIconUnsets).length) {
-      await db.collection('store_settings').updateOne(
+      await db.collection<{ _id: string; [key: string]: any }>('store_settings').updateOne(
         { _id: 'footer' },
         { $set: { ...footerIconUpdates, updatedAt: now, updatedByAdminEmail: admin.email }, ...(Object.keys(footerIconUnsets).length ? { $unset: footerIconUnsets } : {}) },
         { upsert: true }
@@ -552,7 +552,7 @@ async function performAction(db: Awaited<ReturnType<typeof getDb>>, admin: { id:
     const content = textValue(body.content, 3500);
     const page = PAGE_KEYS[key];
     if (!page || !content) throw new Error('اختر صفحة صالحة وأدخل محتواها.');
-    await db.collection('store_pages').updateOne(
+    await db.collection<{ _id: string; [key: string]: any }>('store_pages').updateOne(
       { _id: key },
       { $set: { title: page.title, group: page.group, content, updatedAt: now, updatedByAdminEmail: admin.email } },
       { upsert: true }
