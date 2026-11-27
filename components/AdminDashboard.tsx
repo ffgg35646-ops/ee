@@ -182,7 +182,7 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
   const [query, setQuery] = useState('');
   const [productEditor, setProductEditor] = useState<ProductRow | null | false>(false);
   const [categoryEditor, setCategoryEditor] = useState<CategoryRow | null | false>(false);
-  const [singleUrl, setSingleUrl] = useState('');
+  const [singleUrl, setSingleUrl] = useState('');\n  const [categoryUrl, setCategoryUrl] = useState('https://www.al-brag-ksa.store/catalog?category=Apple-iPhone-18-Pro-Max');\n  const [categorySampleUrl, setCategorySampleUrl] = useState('https://www.al-brag-ksa.store/product2/1902');
   const [singlePreview, setSinglePreview] = useState<Record<string, unknown> | null>(null);
   const [caseMaskLinks, setCaseMaskLinks] = useState<Record<string, string>>({});
   const [singleBusy, setSingleBusy] = useState(false);
@@ -354,6 +354,29 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
       setNotice('اكتمل الفحص: تم العثور على ' + result.discovery.urls.length + ' رابط منتج.');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'تعذر فحص الموقع.');
+    } finally { setBusy(false); }
+  }
+
+  async function discoverCategoryCatalog() {
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await apiPost<{
+        message: string;
+        job?: ImportJob;
+        discovery?: { urls?: string[]; scannedPages?: number; warnings?: string[] };
+      }>({
+        action: 'discover-category-catalog',
+        categoryUrl,
+        sampleProductUrl: categorySampleUrl
+      });
+      setJob(result.job || null);
+      const count = result.discovery?.urls?.length || 0;
+      setNotice(count
+        ? `تم اكتشاف ${count} رابط منتج في القسم. ابدأ استيراد الدفعات من نفس الصفحة.`
+        : result.message || 'لم يتم العثور على منتجات في القسم.');
+      if (!count && result.discovery?.warnings?.length) setError(result.discovery.warnings.join(' · '));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'تعذر اكتشاف منتجات القسم.');
     } finally { setBusy(false); }
   }
 
@@ -716,6 +739,22 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
 
           {!loading && view === 'import' ? (
             <>
+              <Panel title="استيراد منتجات قسم محدد" subtitle="انسخ رابط القسم من موقع البرق المضيء. يمكن إضافة رابط منتج كمثال لضمان إدخاله ضمن نفس العملية.">
+                <div className={styles['admin-editor-grid']}>
+                  <Field label="رابط القسم من الموقع" wide>
+                    <Input value={categoryUrl} onChange={(event) => setCategoryUrl(event.target.value)} placeholder="https://www.al-brag-ksa.store/catalog?category=..." />
+                  </Field>
+                  <Field label="رابط منتج من القسم (اختياري)" wide>
+                    <Input value={categorySampleUrl} onChange={(event) => setCategorySampleUrl(event.target.value)} placeholder="https://www.al-brag-ksa.store/product2/1902" />
+                  </Field>
+                </div>
+                <div className={styles['admin-actions']}>
+                  <Button onClick={() => void discoverCategoryCatalog()} disabled={busy || activeJob || !categoryUrl.trim()}>
+                    {busy ? 'جارٍ فحص القسم...' : 'اكتشاف منتجات هذا القسم'}
+                  </Button>
+                </div>
+              </Panel>
+
               <Panel title="استيراد كتالوج البرق المضيء" subtitle="الاستيراد هنا والبوت يشتركان في سجل عملية واحد داخل MongoDB.">
                 <div className={styles['admin-actions']}>
                   <Button onClick={() => void discoverCatalog()} disabled={busy || activeJob}>⌕ اكتشاف المنتجات من الموقع</Button>
