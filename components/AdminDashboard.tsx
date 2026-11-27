@@ -22,7 +22,7 @@ type OrderRow = AnyRow & {
 type ImportJob = {
   status: string; urls: string[]; cursor: number; imported: number; skipped: number; failed: number;
   errors?: string[]; scannedSitemaps?: number; scannedPages?: number; warnings?: string[];
-  lastBatch?: Array<{ state: string; name: string; error?: string }>;
+  startedBy?: string; lastBatch?: Array<{ state: string; name: string; error?: string }>;
 };
 type ReviewRow = AnyRow & { id: string; name?: string; comment?: string; rating?: number; visible?: boolean; createdAt?: string; orderNumber?: string };
 type BannerRow = { id: string; imageUrl: string; alt: string };
@@ -310,7 +310,7 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
       }
       const payload: Record<string, unknown> = {
         action: 'save-product',
-        ...(productEditor && productEditor !== false ? { id: productEditor.id } : {}),
+        ...(productEditor ? { id: productEditor.id } : {}),
         name: form.get('name'),
         categoryId,
         price: Number(form.get('price')),
@@ -335,7 +335,7 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
     const form = new FormData(event.currentTarget);
     await runAction({
       action: 'save-category',
-      ...(categoryEditor && categoryEditor !== false ? { id: categoryEditor.id } : {}),
+      ...(categoryEditor ? { id: categoryEditor.id } : {}),
       name: form.get('name'),
       description: form.get('description')
     }, 'categories');
