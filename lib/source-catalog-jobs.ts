@@ -59,7 +59,7 @@ export async function startCatalogImportJob(
   discovery: { scannedSitemaps?: number; scannedPages?: number; warnings?: string[]; categoryOverride?: string } = {},
   startedBy = 'web'
 ) {
-  const uniqueUrls = [...new Set(urls)].filter((url) => /^https:\/\/(?:www\.)?al-brag-ksa\.store\/product2\/\d+\/?$/i.test(url)).slice(0, 2000);
+  const uniqueUrls = [...new Set(urls)].filter((url) => /^https:\/\/(?:www\.)?al-brag-ksa\.(?:com|store)\/product2\/\d+\/?$/i.test(url)).slice(0, 2000);
   const jobs = db.collection<CatalogImportJob>('catalog_import_jobs');
   const active = await jobs.findOne({ _id: AL_BRAG_IMPORT_JOB_ID, status: { $in: ['ready', 'running'] } });
   if (active) throw new Error('توجد عملية استيراد كتالوج نشطة بالفعل. استكملها أو أوقفها قبل بدء عملية جديدة.');
@@ -105,7 +105,7 @@ async function ensureImportedCategory(db: Db, rawName: string) {
   const created: StoreCategory = {
     _id: new ObjectId(),
     name,
-    description: 'قسم أُنشئ عند استيراد المنتجات من al-brag-ksa.store',
+    description: 'قسم أُنشئ عند استيراد المنتجات من موقع البرق المضيء',
     createdAt: now,
     updatedAt: now,
     deleted: false
