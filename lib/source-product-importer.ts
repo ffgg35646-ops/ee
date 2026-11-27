@@ -457,3 +457,209 @@ export async function importAlBragProduct(rawUrl: string): Promise<ImportedSourc
     ...(barcode ? { sourceBarcode: barcode.slice(0, 80) } : {})
   };
 }
+
+
+type SourceDiscoveryResult = {
+  urls: string[];
+  scannedSitemaps: number;
+  scannedPages: number;
+  warnings: string[];
+};
+
+async function fetchSourceDocument(value: string): Promise<{ text: string; url: URL }> {
+  let url = new URL(value);
+  if (url.protocol !== "https:" || !SOURCE_HOSTS.has(url.hostname.toLowerCase()) || url.username || url.password) {
+    throw new Error("رابط ملف المصدر خارج النطاق المسموح.");
+  }
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "manual",
+      cache: "no-store",
+      headers: {
+        accept: "application/xml,text/xml,text/plain,text/html;q=0.9,*/*;q=0.8",
+        "accept-language": "ar-SA,ar;q=0.9,en;q=0.7",
+        "user-agent": "Mozilla/5.0 (compatible; EEProductCatalogDiscovery/1.0)"
+      },
+      signal: AbortSignal.timeout(18_000)
+    });
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location || attempt === 3) throw new Error("تعذر تتبع تحويل ملف المصدر.");
+      const nextUrl = new URL(location, url);
+      if (nextUrl.protocol !== "https:" || !SOURCE_HOSTS.has(nextUrl.hostname.toLowerCase())) {
+        throw new Error("ملف المصدر يحوّل إلى نطاق غير معتمد.");
+      }
+      url = nextUrl;
+      continue;
+    }
+
+    if (!response.ok) throw new Error("HTTP " + response.status + " عند قراءة " + url.pathname);
+    return { text: await readLimitedBody(response), url };
+  }
+  throw new Error("تعذر قراءة ملف المصدر.");
+}
+
+function normalizeSourceUrl(value: string, base: URL): string {
+  const candidate = value.trim().replace(/^<!\[CDATA\[|\]\]>$/g, "");
+  if (!candidate) return "";
+  try {
+    const url = new URL(decodeHtml(candidate), base);
+    if (
+      url.protocol !== "https:"
+      || !SOURCE_HOSTS.has(url.hostname.toLowerCase())
+      || url.username
+      || url.password
+      || !/^\/product2\/\d+\/?$/i.test(url.pathname)
+    ) return "";
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function collectProductLinks(document: string, pageUrl: URL): string[] {
+  const found = new Set<string>();
+  for (const match of document.matchAll(/<loc\b[^>]*>([\s\S]*?)<\/loc>/gi)) {
+    const url = normalizeSourceUrl(stripHtml(match[1]), pageUrl);
+    if (url) found.add(url);
+  }
+  for (const tag of document.match(/<a\b[^>]*>/gi) || []) {
+    const href = readAttribute(tag, "href");
+    const url = normalizeSourceUrl(href, pageUrl);
+    if (url) found.add(url);
+  }
+  for (const match of document.matchAll(/https?:\/\/(?:www\.)?al-brag-ksa\.store\/product2\/\d+\/?/gi)) {
+    const url = normalizeSourceUrl(match[0], pageUrl);
+    if (url) found.add(url);
+  }
+  return [...found];
+}
+
+export async function discoverAlBragProductUrls(): Promise<SourceDiscoveryResult> {
+  const origin = "https://www.al-brag-ksa.store";
+  const warnings: string[] = [];
+  const sitemapQueue = new Set<string>([
+    origin + "/sitemap.xml",
+    origin + "/sitemap_index.xml",
+    origin + "/sitemap-index.xml",
+    origin + "/sitemap_products.xml",
+    origin + "/product-sitemap.xml"
+  ]);
+  const visitedSitemaps = new Set<string>();
+  const productUrls = new Set<string>();
+  let scannedSitemaps = 0;
+  let scannedPages = 0;
+
+  try {
+    const robots = await fetchSourceDocument(origin + "/robots.txt");
+    for (const line of robots.text.split(/\r?\n/)) {
+      const match = line.match(/^\s*sitemap:\s*(\S+)/i);
+      if (!match) continue;
+      try {
+        const sitemapUrl = new URL(match[1], robots.url);
+        if (sitemapUrl.protocol === "https:" && SOURCE_HOSTS.has(sitemapUrl.hostname.toLowerCase())) {
+          sitemapQueue.add(sitemapUrl.toString());
+        }
+      } catch {
+        // Ignore malformed sitemap declarations.
+      }
+    }
+  } catch (error) {
+    warnings.push("تعذر قراءة robots.txt: " + (error instanceof Error ? error.message : "خطأ غير معروف"));
+  }
+
+  while (sitemapQueue.size && visitedSitemaps.size < 30) {
+    const sitemapUrl = sitemapQueue.values().next().value as string;
+    sitemapQueue.delete(sitemapUrl);
+    if (visitedSitemaps.has(sitemapUrl)) continue;
+    visitedSitemaps.add(sitemapUrl);
+
+    try {
+      const document = await fetchSourceDocument(sitemapUrl);
+      scannedSitemaps += 1;
+      for (const productUrl of collectProductLinks(document.text, document.url)) {
+        productUrls.add(productUrl);
+      }
+
+      for (const match of document.text.matchAll(/<loc\b[^>]*>([\s\S]*?)<\/loc>/gi)) {
+        const rawLocation = decodeHtml(stripHtml(match[1]));
+        try {
+          const child = new URL(rawLocation, document.url);
+          if (
+            child.protocol === "https:"
+            && SOURCE_HOSTS.has(child.hostname.toLowerCase())
+            && /\.xml(?:\.gz)?(?:$|\?)/i.test(child.pathname)
+            && !visitedSitemaps.has(child.toString())
+            && visitedSitemaps.size + sitemapQueue.size < 30
+          ) {
+            sitemapQueue.add(child.toString());
+          } else if (
+            child.protocol === "https:"
+            && SOURCE_HOSTS.has(child.hostname.toLowerCase())
+            && !/^\/product2\/\d+\/?$/i.test(child.pathname)
+            && productUrls.size < 1
+            && scannedPages < 8
+          ) {
+            // Category/page URLs in some sitemap formats are used below as a fallback.
+          }
+        } catch {
+          // Ignore malformed sitemap entries.
+        }
+      }
+    } catch (error) {
+      warnings.push("تعذرت قراءة " + new URL(sitemapUrl).pathname + ": " + (error instanceof Error ? error.message : "خطأ غير معروف"));
+    }
+  }
+
+  if (!productUrls.size) {
+    const pageQueue = new Set<string>([origin + "/"]);
+    while (pageQueue.size && scannedPages < 8 && productUrls.size < 1000) {
+      const pageUrl = pageQueue.values().next().value as string;
+      pageQueue.delete(pageUrl);
+      try {
+        const page = await fetchSourceDocument(pageUrl);
+        scannedPages += 1;
+        for (const productUrl of collectProductLinks(page.text, page.url)) productUrls.add(productUrl);
+
+        if (scannedPages === 1) {
+          for (const tag of page.text.match(/<a\b[^>]*>/gi) || []) {
+            const href = readAttribute(tag, "href");
+            if (!href) continue;
+            try {
+              const child = new URL(href, page.url);
+              if (
+                child.protocol === "https:"
+                && SOURCE_HOSTS.has(child.hostname.toLowerCase())
+                && !/^\/product2\/\d+\/?$/i.test(child.pathname)
+                && !/\/(?:admin|account|cart|checkout|login|register|privacy|terms)(?:\/|$)/i.test(child.pathname)
+                && pageQueue.size < 7
+              ) pageQueue.add(child.toString());
+            } catch {
+              // Ignore malformed links.
+            }
+          }
+        }
+      } catch (error) {
+        warnings.push("تعذرت قراءة صفحة " + pageUrl + ": " + (error instanceof Error ? error.message : "خطأ غير معروف"));
+      }
+    }
+  }
+
+  const urls = [...productUrls].sort((a, b) => {
+    const left = Number(a.match(/\/product2\/(\d+)/i)?.[1] || 0);
+    const right = Number(b.match(/\/product2\/(\d+)/i)?.[1] || 0);
+    return left - right;
+  });
+
+  if (!urls.length) {
+    warnings.push("لم يتم العثور على روابط /product2/{id} في خرائط الموقع أو الصفحات العامة.");
+  }
+
+  return { urls, scannedSitemaps, scannedPages, warnings };
+}
