@@ -28,7 +28,7 @@
 ## متغيرات البيئة
 أضف القيم في إعدادات الاستضافة فقط؛ لا تحفظ أسرارًا حقيقية في GitHub:
 - `MONGODB_URI`
-- `MONGODB_DB=bb_store`
+- `MONGODB_DB=ee_store`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ADMIN_IDS=5569918211,2222222222` — معرّفات الأدمن مفصولة بفاصلة (يمكن إضافة أكثر من ID). وللتوافق مع الإعداد القديم يمكن استخدام `TELEGRAM_ADMIN_ID` لمعرّف واحد.
 - `TELEGRAM_WEBHOOK_SECRET`
