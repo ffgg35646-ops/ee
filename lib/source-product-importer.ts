@@ -687,7 +687,7 @@ export async function discoverAlBragCategoryProductUrls(
   if (
     categoryUrl.protocol !== "https:"
     || !SOURCE_HOSTS.has(categoryUrl.hostname.toLowerCase())
-    || categoryUrl.pathname.replace(/\\/+$/, "") !== "/catalog"
+    || categoryUrl.pathname.replace(/\/+$/, "") !== "/catalog"
     || categoryUrl.username
     || categoryUrl.password
   ) {
@@ -697,9 +697,9 @@ export async function discoverAlBragCategoryProductUrls(
   const categorySlug = (categoryUrl.searchParams.get("category") || "").trim();
   if (!categorySlug) throw new Error("رابط القسم لا يحتوي على category.");
   categoryUrl.hash = "";
-  const categoryOverride = decodeURIComponent(categorySlug.replace(/\\+/g, " "))
+  const categoryOverride = categorySlug
     .replace(/[-_]+/g, " ")
-    .replace(/\\s+/g, " ")
+    .replace(/\s+/g, " ")
     .trim()
     .slice(0, 120);
   if (!categoryOverride) throw new Error("تعذر تحديد اسم القسم من الرابط.");
@@ -728,7 +728,7 @@ export async function discoverAlBragCategoryProductUrls(
       scannedPages += 1;
       for (const productUrl of collectProductLinks(page.text, page.url)) productUrls.add(productUrl);
 
-      for (const tag of page.text.match(/<a\\b[^>]*>/gi) || []) {
+      for (const tag of page.text.match(/<a\b[^>]*>/gi) || []) {
         const href = readAttribute(tag, "href");
         if (!href) continue;
         try {
@@ -760,7 +760,7 @@ export async function discoverAlBragCategoryProductUrls(
   }
 
   const urls = [...productUrls].sort((a, b) => {
-    const left = Number(a.match(/\\/product2\\/(\\d+)/i)?.[1] || 0);
+    const left = Number(a.match(/\/product2\/(\d+)/i)?.[1] || 0);
     const right = Number(b.match(/\\/product2\\/(\\d+)/i)?.[1] || 0);
     return left - right;
   }).slice(0, 2000);
