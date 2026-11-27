@@ -365,6 +365,37 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
     }
   }
 
+  async function importAllCatalogImages() {
+    setBusy(true);
+    setError('');
+    setNotice('بدء نقل صور المنتجات إلى مكتبة الإدارة...');
+    let totalImages = 0;
+    try {
+      for (let batchIndex = 0; batchIndex < 100; batchIndex += 1) {
+        const result = await apiPost<{
+          message?: string; importedImages?: number; processedCount?: number;
+          remainingCount?: number; errors?: string[];
+        }>({ action: 'import-catalog-media-batch' });
+        totalImages += result.importedImages || 0;
+        setNotice('تم حفظ ' + totalImages + ' صورة حتى الآن، والمتبقي ' + (result.remainingCount || 0) + ' منتج.');
+        if (result.errors?.length) {
+          throw new Error('توقف النقل عند أحد المنتجات: ' + result.errors[0]);
+        }
+        if (!result.remainingCount) {
+          await loadView('products');
+          setNotice('اكتمل حفظ الصور داخل admin_media. إجمالي الصور المحفوظة: ' + totalImages + '.');
+          return;
+        }
+        if (!result.processedCount) throw new Error('لم يتم نقل صور جديدة. راجع روابط الصور المتبقية.');
+      }
+      throw new Error('وصل النقل إلى الحد التشغيلي لهذه الجلسة. شغّل العملية مرة أخرى لاستكمال الباقي.');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'تعذر نقل صور المنتجات.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -635,7 +666,7 @@ export default function AdminDashboard({ initialAdmin }: { initialAdmin: AdminUs
 
           {!loading && view === 'products' ? (
             <>
-              <Panel title="كتالوج المنتجات" subtitle="إضافة وتعديل وحذف المنتجات التي تظهر في المتجر." action={<Button onClick={() => setProductEditor(null)}>＋ منتج جديد</Button>}>
+              <Panel title="كتالوج المنتجات" subtitle="إضافة وتعديل وحذف المنتجات التي تظهر في المتجر." action={<div className={styles['admin-row-buttons']}><Button kind="secondary" onClick={() => void importAllCatalogImages()} disabled={busy}>حفظ كل الصور داخل admin_media</Button><Button onClick={() => setProductEditor(null)}>＋ منتج جديد</Button></div>}>
                 <div className={styles['admin-toolbar']}>
                   <Input placeholder="ابحث باسم المنتج أو القسم أو SKU..." value={query} onChange={(event) => setQuery(event.target.value)} />
                   <Button kind="secondary" onClick={() => void loadView('products')}>بحث وتحديث</Button>
